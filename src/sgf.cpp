@@ -2,11 +2,11 @@
 #include <algorithm>
 
 namespace erasgf {
-const Property* Node::find(std::string_view name) const {
+const Property* Node::find(StringView name) const {
     for (const auto& p : properties) if (p.name == name) return &p;
     return nullptr;
 }
-std::string Node::value(std::string_view name) const {
+std::string Node::value(StringView name) const {
     const auto* p = find(name);
     return p && !p->values.empty() ? p->values.front() : std::string{};
 }
@@ -16,7 +16,7 @@ bool letter(char c) { return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'); }
 
 class Parser {
 public:
-    Parser(std::string_view text, const ParseLimits& limits) : text_(text), limits_(limits) {}
+    Parser(StringView text, const ParseLimits& limits) : text_(text), limits_(limits) {}
     Collection run() {
         if (text_.size() > limits_.max_bytes) fail("file exceeds the size limit");
         if (text_.substr(0, 3) == "\xef\xbb\xbf") pos_ = 3;
@@ -33,7 +33,7 @@ public:
         return result;
     }
 private:
-    std::string_view text_;
+    StringView text_;
     ParseLimits limits_;
     std::size_t pos_ = 0;
     std::size_t nodes_ = 0;
@@ -99,7 +99,7 @@ private:
 };
 }
 
-Collection parse_sgf(std::string_view input, const ParseLimits& limits) {
+Collection parse_sgf(StringView input, const ParseLimits& limits) {
     return Parser(input, limits).run();
 }
 

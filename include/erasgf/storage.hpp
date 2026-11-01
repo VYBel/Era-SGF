@@ -1,7 +1,7 @@
 #pragma once
 
 #include <cstddef>
-#include <optional>
+#include "erasgf/compat.hpp"
 #include <string>
 
 namespace erasgf {
@@ -16,7 +16,7 @@ struct FileState {
     std::size_t node = 0;
     std::string encoding = "auto";
 };
-std::optional<FileState> load_state(const std::string& directory, const std::string& path, const std::string& source);
+Optional<FileState> load_state(const std::string& directory, const std::string& path, const std::string& source);
 void save_state(const std::string& directory, const FileState& state);
-std::optional<std::string> load_last_file(const std::string& directory);
+Optional<std::string> load_last_file(const std::string& directory);
 } // namespace erasgf

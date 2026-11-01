@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <stdexcept>
 #include <string>
-#include <string_view>
+#include "erasgf/compat.hpp"
 #include <vector>
 
 namespace erasgf {
@@ -18,8 +18,8 @@ struct Node {
     std::size_t parent = no_node;
     std::vector<std::size_t> children;
     std::vector<Property> properties;
-    const Property* find(std::string_view name) const;
-    std::string value(std::string_view name) const;
+    const Property* find(StringView name) const;
+    std::string value(StringView name) const;
 };
 
 struct Game { std::vector<Node> nodes; };
@@ -31,6 +31,6 @@ struct ParseLimits {
     std::size_t max_depth = 128;
 };
 
-Collection parse_sgf(std::string_view input, const ParseLimits& limits = {});
+Collection parse_sgf(StringView input, const ParseLimits& limits = {});
 std::string game_text_sample(const Game& game);
 } // namespace erasgf

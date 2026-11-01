@@ -14,11 +14,11 @@ int integer(const std::string& s, int fallback) {
     if (s.size() > 5 || !std::all_of(s.begin(), s.end(), [](char c) { return c >= '0' && c <= '9'; })) throw std::runtime_error("Invalid SGF integer: " + s);
     return std::stoi(s);
 }
-Point point(std::string_view s, int size) {
+Point point(StringView s, int size) {
     if (s.size() != 2 || s[0] < 'a' || s[1] < 'a' || s[0] >= 'a' + size || s[1] >= 'a' + size) throw std::runtime_error("Point outside the board: " + std::string(s));
     return {s[0] - 'a', s[1] - 'a'};
 }
-std::vector<Point> points(std::string_view s, int size) {
+std::vector<Point> points(StringView s, int size) {
     if (s.size() == 2) return {point(s, size)};
     if (s.size() != 5 || s[2] != ':') throw std::runtime_error("Invalid SGF point list");
     Point a = point(s.substr(0, 2), size), b = point(s.substr(3, 2), size);
@@ -48,8 +48,8 @@ std::pair<std::vector<int>, bool> group(const Position& p, int start) {
     }
     return {stones, liberty};
 }
-void move(Position& p, std::string_view s, Stone color) {
-    ++p.move_number; p.last_move.reset();
+void move(Position& p, StringView s, Stone color) {
+    ++p.move_number; p.last_move = none;
     if (s.empty() || s == "tt") return;
     const Point pt = point(s, p.size);
     const int index = pt.y * p.size + pt.x;
@@ -67,7 +67,7 @@ void move(Position& p, std::string_view s, Stone color) {
     if (!own.second) {
         for (int sidx : own.first) p.cells[sidx] = Stone::empty;
         (color == Stone::black ? p.white_captures : p.black_captures) += static_cast<int>(own.first.size());
-        p.last_move.reset();
+        p.last_move = none;
     }
 }
 }
@@ -109,7 +109,7 @@ Position replay(const Game& game, std::size_t node) {
         for (const auto& value : prop->values) for (Point q : points(value, p.size)) p.marks.push_back({q, kind.second, {}});
     if (const auto* labels = selected.find("LB")) for (const auto& value : labels->values) {
         if (value.size() < 3 || value[2] != ':') throw std::runtime_error("Invalid board label");
-        p.marks.push_back({point(std::string_view(value).substr(0, 2), p.size), MarkKind::label, value.substr(3)});
+        p.marks.push_back({point(StringView(value).substr(0, 2), p.size), MarkKind::label, value.substr(3)});
     }
     return p;
 }
@@ -142,7 +142,15 @@ bool Viewer::previous() {
     node_ = node().parent; return true;
 }
 void Viewer::begin() { node_ = 0; }
-void Viewer::end() { while (next()) {} }
+void Viewer::end() {
+    auto target = node_;
+    std::size_t visited = 0;
+    while (!game().nodes[target].children.empty()) {
+        if (++visited > game().nodes.size()) throw std::runtime_error("Cycle in SGF tree");
+        target = game().nodes[target].children.at(chosen_[target]);
+    }
+    select_node(target);
+}
 bool Viewer::previous_branch() {
     auto target = node().parent;
     if (target == no_node) return false;

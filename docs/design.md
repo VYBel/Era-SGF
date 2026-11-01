@@ -2,7 +2,7 @@
 
 Date: 2026-11-01
 
-Status: approved for implementation on 2026-11-01; no device build has been validated.
+Status: approved on 2026-11-01; native ARM build verified, physical-device checks pending.
 
 ## Intent and agreed requirements
 
@@ -25,9 +25,11 @@ requirements supplied by the owner.
    It requires cross-compilation and physical-device checks, but provides a standalone viewer
    and direct integration with PocketBook file handlers.
 
-The proposed implementation language is C++17, with CMake and the SDK toolchain. The original
+The implementation uses C++14, with Make, optional CMake and the SDK toolchain. The original
 project sources use MIT so other people can study, redistribute and adapt the viewer. No
-GOReader/KOReader code or SDK distribution is copied into the repository.
+GOReader/KOReader code or SDK distribution is copied into the repository. C++17 was initially
+proposed; inspecting the official SDK established a GCC/libstdc++ 6.3 baseline, so the
+implementation uses its C++14 Library Fundamentals optional/string-view types through local aliases.
 
 ## First-version scope
 

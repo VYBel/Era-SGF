@@ -1,7 +1,7 @@
 # Contributing
 
-Era-SGF is at the design stage. Please discuss a feature or substantial change in an issue
-before implementing it, and read [docs/design.md](docs/design.md) for the intended scope.
+Era-SGF has an experimental implementation. Please discuss a feature or substantial change
+in an issue before implementing it, and read [docs/design.md](docs/design.md) for the intended scope.
 
 ## Principles
 
@@ -20,8 +20,9 @@ installation method and steps to reproduce. An anonymised or synthetic SGF helps
 formatting and encoding problems. Report both file association and launching from Applications
 when they behave differently.
 
-The project currently has no build or test commands. These instructions will be updated when
-the implementation and first reproducible toolchain are added.
+Run `make test all` for the portable core, file-operation integration, device event adapter
+and packaging checks. Use `make package` for the SDK build after following [docs/build.md](docs/build.md).
+Do not describe passing host-adapter tests as physical-device testing.
 
 Contributions to the original project code are accepted under the repository's MIT license.
 Retain all notices when proposing a third-party dependency.

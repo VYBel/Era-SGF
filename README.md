@@ -2,23 +2,26 @@
 
 An independent SGF viewer for PocketBook e-readers, starting with **PocketBook Era 700**.
 
-[Русский](README.ru.md) · [Design](docs/design.md) · [Contributing](CONTRIBUTING.md)
+[Русский](README.ru.md) · [Install](docs/install.md) · [Build](docs/build.md) · [Validation](docs/validation.md) · [Contributing](CONTRIBUTING.md)
 
 ## Status
 
-**Project setup and design. There is no working viewer or installable release yet.**
+**Experimental version 0.1.0. Native ARM build and desktop tests pass; physical-device testing is pending.**
 
-The first version will be a native PocketBook application built with the InkView SDK.
-It will launch from the device's Applications menu and act as a handler for `.sgf` files.
+Era-SGF is a native PocketBook application built with the InkView SDK.
+It launches from the device's Applications menu and can register a handler for `.sgf` files.
 KOReader is not required.
 
-## First version
+The initial B288 package targets PocketBook firmware **6.8+**. Other devices and the stock
+library's handling of a newly registered `.sgf` format need their own compatibility checks.
+
+## Features
 
 - Browse local SGF records on 9×9, 13×13 and 19×19 boards.
 - Step forward and backward, select variations, and return to a branching point.
 - Read move comments, game information, and board labels and marks.
 - Use the touch screen and hardware page-turn buttons.
-- Resume the last viewed position and variation.
+- Resume the last viewed position and variation after closing or hiding the application.
 - Read UTF-8 and legacy Cyrillic text: Windows-1251, KOI8-R, CP866 and ISO-8859-5.
 - Respect SGF `CA[...]` metadata, with automatic detection and a remembered manual override.
 
@@ -42,13 +45,25 @@ recorded by model, firmware and application version after testing.
 
 ## Installation and builds
 
-No release is available yet. Installation commands will be published with the first tested build.
-The package is intended to contain a native `.app`, required assets and an optional association
-installer that preserves and backs up the user's existing `extensions.cfg`.
+No stable release is published yet. To build the experimental archive on Linux:
 
-The proposed implementation uses C++17, CMake and PocketBook InkView. Portable SGF, encoding
-and navigation logic will have desktop tests; device integration will be checked separately.
-See the [design document](docs/design.md) for the current proposal and acceptance criteria.
+```sh
+make test all
+bash scripts/setup-sdk.sh
+make package
+```
+
+The SDK download is about 1.3 GB and stays outside Git. See [build requirements](docs/build.md).
+The resulting ZIP contains the native `.app`, association install/remove launchers, synthetic
+examples and license notices. Extract it into the reader's USB storage root, then launch
+`era-sgf` from Applications. Run `era-sgf-install` explicitly to register `.sgf` files.
+Existing configuration is backed up and other handlers are retained. Read the
+[installation guide](docs/install.md) before the first device test.
+
+The implementation uses C++14 with the official SDK's GCC 6.3, Make or optional CMake, and
+PocketBook InkView. Portable logic and the event adapter have desktop tests. The
+[validation report](docs/validation.md) distinguishes these results from physical-device checks.
+See the [design document](docs/design.md) for scope and acceptance criteria.
 
 ## License
 

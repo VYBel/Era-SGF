@@ -1,7 +1,7 @@
 #pragma once
 
 #include "erasgf/sgf.hpp"
-#include <optional>
+#include "erasgf/compat.hpp"
 
 namespace erasgf {
 enum class Stone { empty, black, white };
@@ -14,7 +14,7 @@ struct Position {
     int black_captures = 0;
     int white_captures = 0;
     int move_number = 0;
-    std::optional<Point> last_move;
+    Optional<Point> last_move;
     std::vector<Mark> marks;
     Stone at(int x, int y) const;
 };

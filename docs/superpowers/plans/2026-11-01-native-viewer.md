@@ -6,7 +6,7 @@
 
 **Architecture:** A portable C++ core parses raw SGF trees, decodes their text and replays any selected node. A shared presentation model feeds InkView and a desktop SVG preview. Installation and application-owned state use tested file operations.
 
-**Tech stack:** C++17, Make, optional CMake/CTest, PocketBook InkView SDK 6.8 B288, Python 3 for fixture generation and integration tests. No runtime interpreter or online service is required on the reader.
+**Tech stack:** C++14, Make, optional CMake/CTest, PocketBook InkView SDK 6.8 B288, Python 3 for fixture generation and integration tests. No runtime interpreter or online service is required on the reader.
 
 **Spec:** [docs/design.md](../../design.md), approved by the owner on 2026-11-01.
 
@@ -42,7 +42,7 @@
 
 ### Task 1: Parse and replay SGF records
 
-**Interfaces:** `Collection parse_sgf(std::string_view, const ParseLimits& = {})`; `Game` owns indexed `Node` objects and their raw `Property` values. `Position replay(const Game&, size_t)` returns a bounded board, captured-stone counts, last move and selected-node annotations. `Viewer` owns `Collection` and exposes `select_game`, `select_node`, `next`, `previous`, `begin`, `end` and `previous_branch`.
+**Interfaces:** `Collection parse_sgf(StringView, const ParseLimits& = {})`; `Game` owns indexed `Node` objects and their raw `Property` values. `Position replay(const Game&, size_t)` returns a bounded board, captured-stone counts, last move and selected-node annotations. `Viewer` owns `Collection` and exposes `select_game`, `select_node`, `next`, `previous`, `begin`, `end` and `previous_branch`.
 
 - [ ] Write real C++ behavior tests for escaped text, collections, nested branches, empty values, passes, setup rectangles/removals, captures, sibling branch isolation, malformed syntax, unsupported games/sizes and parser limits.
 - [ ] Compile interfaces with unimplemented stubs and watch the behavior tests fail because functionality is missing.
@@ -52,7 +52,7 @@
 
 ### Task 2: Decode legacy text
 
-**Interfaces:** `std::string normalize_encoding(std::string_view)`; `std::string decode_text(std::string_view, std::string_view)`; `EncodingChoice choose_encoding(std::string_view sample, std::string_view declared, std::string_view manual = "auto")`. Choices expose name, uncertainty and explanatory status. UI obtains per-game raw text and CA from Task 1.
+**Interfaces:** `std::string normalize_encoding(StringView)`; `std::string decode_text(StringView, StringView)`; `EncodingChoice choose_encoding(StringView sample, StringView declared, StringView manual = "auto")`. Choices expose name, uncertainty and explanatory status. UI obtains per-game raw text and CA from Task 1.
 
 - [ ] Add failing tests with hand-checked byte literals for all codecs, CA aliases, invalid UTF-8, missing/wrong declarations, ambiguous short text and explicit manual override/reset.
 - [ ] Implement strict decoding and conservative detection. Generate single-byte mapping tables from Python's codec database; no iconv dependency is needed on the device.

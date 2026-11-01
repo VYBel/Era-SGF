@@ -9,7 +9,7 @@ namespace erasgf {
 namespace {
 #include "codec_tables.inc"
 
-std::u32string unicode(std::string_view s) {
+std::u32string unicode(StringView s) {
     std::u32string out;
     for (std::size_t i = 0; i < s.size();) {
         const auto first = static_cast<unsigned char>(s[i++]);
@@ -38,7 +38,7 @@ void append(std::string& out, char32_t cp) {
 }
 
 struct Score { std::string encoding; double score; int letters; int non_ascii; };
-Score russian_score(std::string_view text, const std::string& encoding) {
+Score russian_score(StringView text, const std::string& encoding) {
     const auto characters = unicode(decode_text(text, encoding));
     static const std::u32string alphabet = U"оеаинтсрвлкмдпуяыьгзбчйхжшюцщэфъё";
     static const double frequencies[] = {10.97, 8.45, 8.01, 7.35, 6.70, 6.26, 5.47, 4.73, 4.54, 4.40, 3.49, 3.21, 2.98, 2.81, 2.62, 2.01, 1.90, 1.74, 1.70, 1.65, 1.59, 1.44, 1.21, .97, .94, .73, .64, .48, .36, .32, .26, .04, .04};
@@ -72,7 +72,7 @@ Score russian_score(std::string_view text, const std::string& encoding) {
 }
 }
 
-std::string normalize_encoding(std::string_view name) {
+std::string normalize_encoding(StringView name) {
     std::string key;
     for (char c : name) {
         if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + 'a' - 'A');
@@ -88,7 +88,7 @@ std::string normalize_encoding(std::string_view name) {
     throw std::runtime_error("Unsupported encoding: " + std::string(name) + "; select a supported encoding manually");
 }
 
-std::string decode_text(std::string_view bytes, std::string_view encoding) {
+std::string decode_text(StringView bytes, StringView encoding) {
     const auto name = normalize_encoding(encoding);
     if (name == "auto") throw std::runtime_error("A concrete encoding is required for decoding");
     if (name == "UTF-8") {
@@ -107,7 +107,7 @@ std::string decode_text(std::string_view bytes, std::string_view encoding) {
     return result;
 }
 
-EncodingChoice choose_encoding(std::string_view sample, std::string_view declared, std::string_view manual) {
+EncodingChoice choose_encoding(StringView sample, StringView declared, StringView manual) {
     auto selected = normalize_encoding(manual);
     if (selected != "auto") { (void)decode_text(sample, selected); return {selected, false, "manual"}; }
     if (!declared.empty()) {

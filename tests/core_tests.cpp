@@ -1,6 +1,7 @@
 #include "erasgf/sgf.hpp"
 #include "erasgf/viewer.hpp"
 #include "erasgf/encoding.hpp"
+#include "erasgf/render.hpp"
 #include <functional>
 #include <fstream>
 #include <iostream>
@@ -77,6 +78,11 @@ int main() {
         v.end(); CHECK(v.node().value("B") == "ee");
         CHECK(v.previous_branch()); CHECK(v.node().value("B") == "aa");
         v.begin(); CHECK(v.node_index() == 0);
+    });
+    test("jump to end is atomic when a later node has an invalid move", [] {
+        Viewer v(parse_sgf("(;SZ[9];B[aa];W[aa])"));
+        throws([&] { v.end(); });
+        CHECK(v.node_index() == 0);
     });
     test("invalid syntax cannot masquerade as a partial record", [] {
         throws([] { parse_sgf("(;C[unfinished)"); });
@@ -158,6 +164,44 @@ int main() {
             const auto e = choose_encoding(game_text_sample(g), g.nodes[0].value("CA"));
             CHECK(decode_text(g.nodes[0].value("C"), e.name) == "Привет");
         }
+    });
+    test("shared screen geometry fits small, Era and landscape screens", [] {
+        Viewer viewer(parse_sgf("(;SZ[19]AB[dd]AW[pp]C[Комментарий])"));
+        ViewModel model; model.position = viewer.position(); model.comment = "Комментарий к партии";
+        for (const auto dimensions : {std::pair<int, int>{600, 800}, {1264, 1680}, {1680, 1264}}) {
+            const auto s = make_scene(model, dimensions.first, dimensions.second);
+            CHECK(s.board.w > 0); CHECK(s.comments.h > 0);
+            for (const auto& c : s.controls) {
+                CHECK(c.bounds.x >= 0 && c.bounds.y >= 0);
+                CHECK(c.bounds.x + c.bounds.w <= dimensions.first);
+                CHECK(c.bounds.y + c.bounds.h <= dimensions.second);
+            }
+            for (const auto& op : s.drawing) {
+                CHECK(op.bounds.x >= 0 && op.bounds.y >= 0);
+                CHECK(op.bounds.x + op.bounds.w <= dimensions.first);
+                CHECK(op.bounds.y + op.bounds.h <= dimensions.second);
+            }
+        }
+    });
+    test("Russian wrapping respects code points and paragraph breaks", [] {
+        CHECK(wrap_text("Привет мир\r\nЁж", 6) == std::vector<std::string>({"Привет", "мир", "Ёж"}));
+        CHECK(wrap_text("abcdefgh", 3) == std::vector<std::string>({"abc", "def", "gh"}));
+    });
+    test("long comments have reachable pages and full-screen reading", [] {
+        ViewModel model; model.position = replay(parse_sgf("(;SZ[9])").games[0], 0);
+        for (int i = 0; i < 100; ++i) model.comment += "Длинный комментарий к ходу.\n";
+        auto s = make_scene(model, 600, 800);
+        CHECK(s.comment_pages > 1);
+        bool next = false;
+        for (const auto& c : s.controls) if (c.action == Action::comment_next) next = true;
+        CHECK(next);
+        model.comment_page = 10000;
+        s = make_scene(model, 600, 800);
+        CHECK(s.comment_page == s.comment_pages - 1);
+        model.full_comment = true;
+        auto full = make_scene(model, 600, 800);
+        CHECK(full.comments.h > s.comments.h);
+        CHECK(full.comment_pages < s.comment_pages);
     });
     std::cout << (total - failures) << '/' << total << " tests passed\n";
     return failures == 0 ? 0 : 1;

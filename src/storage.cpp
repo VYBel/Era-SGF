@@ -189,7 +189,7 @@ AssociationResult update_association(const std::string& config_path, bool instal
     return result;
 }
 
-std::optional<FileState> load_state(const std::string& directory, const std::string& path, const std::string& source) {
+Optional<FileState> load_state(const std::string& directory, const std::string& path, const std::string& source) {
     try {
         const auto data = read_file(directory + '/' + fingerprint(path) + ".state", 65536);
         std::istringstream input(data); std::string line;
@@ -207,7 +207,7 @@ void save_state(const std::string& directory, const FileState& state) {
     atomic_write(directory + "/last", hex(state.path));
 }
 
-std::optional<std::string> load_last_file(const std::string& directory) {
+Optional<std::string> load_last_file(const std::string& directory) {
     try { auto path = unhex(read_file(directory + "/last", 32768)); path_check(path); return path; } catch (const std::exception&) { return {}; }
 }
 }
