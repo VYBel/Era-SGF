@@ -1,0 +1,32 @@
+# Build products and local toolchains
+/build*/
+/out/
+/dist/
+/sdk/
+/.sdk/
+/vendor-sdk/
+CMakeUserPresets.json
+compile_commands.json
+*.app
+*.o
+*.a
+*.so
+
+# Editor and host files
+/.idea/
+/.vscode/
+.DS_Store
+*~
+
+# Personal records and device data stay local; public fixtures must be synthetic.
+/local/
+/records/
+/device-data/
+*.log
+
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
