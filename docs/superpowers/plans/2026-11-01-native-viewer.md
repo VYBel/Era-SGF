@@ -2,6 +2,8 @@
 
 > **For agentic workers:** Use superpowers:executing-plans to implement this approved design task by task. Steps use checkbox tracking.
 
+**Execution:** completed on 2026-11-01 as experimental 0.1.1; [draft PR #1](https://github.com/VYBel/Era-SGF/pull/1). Physical-device checks remain pending.
+
 **Goal:** Build an experimental standalone PocketBook `.app` that opens SGF records, comments and variations, supports legacy Cyrillic encodings, and registers `.sgf` without KOReader.
 
 **Architecture:** A portable C++ core parses raw SGF trees, decodes their text and replays any selected node. A shared presentation model feeds InkView and a desktop SVG preview. Installation and application-owned state use tested file operations.
@@ -44,51 +46,51 @@
 
 **Interfaces:** `Collection parse_sgf(StringView, const ParseLimits& = {})`; `Game` owns indexed `Node` objects and their raw `Property` values. `Position replay(const Game&, size_t)` returns a bounded board, captured-stone counts, last move and selected-node annotations. `Viewer` owns `Collection` and exposes `select_game`, `select_node`, `next`, `previous`, `begin`, `end` and `previous_branch`.
 
-- [ ] Write real C++ behavior tests for escaped text, collections, nested branches, empty values, passes, setup rectangles/removals, captures, sibling branch isolation, malformed syntax, unsupported games/sizes and parser limits.
-- [ ] Compile interfaces with unimplemented stubs and watch the behavior tests fail because functionality is missing.
-- [ ] Implement the bounded parser, board replay and navigation. Use iterative ancestor replay; do not share mutable board state between branches.
-- [ ] Run `make test-core`; expect all parser/replay/navigation tests to pass.
-- [ ] Commit the self-contained core and its tests.
+- [x] Write real C++ behavior tests for escaped text, collections, nested branches, empty values, passes, setup rectangles/removals, captures, sibling branch isolation, malformed syntax, unsupported games/sizes and parser limits.
+- [x] Compile interfaces with unimplemented stubs and watch the behavior tests fail because functionality is missing.
+- [x] Implement the bounded parser, board replay and navigation. Use iterative ancestor replay; do not share mutable board state between branches.
+- [x] Run `make test-core`; expect all parser/replay/navigation tests to pass.
+- [x] Commit the self-contained core and its tests.
 
 ### Task 2: Decode legacy text
 
 **Interfaces:** `std::string normalize_encoding(StringView)`; `std::string decode_text(StringView, StringView)`; `EncodingChoice choose_encoding(StringView sample, StringView declared, StringView manual = "auto")`. Choices expose name, uncertainty and explanatory status. UI obtains per-game raw text and CA from Task 1.
 
-- [ ] Add failing tests with hand-checked byte literals for all codecs, CA aliases, invalid UTF-8, missing/wrong declarations, ambiguous short text and explicit manual override/reset.
-- [ ] Implement strict decoding and conservative detection. Generate single-byte mapping tables from Python's codec database; no iconv dependency is needed on the device.
-- [ ] Test two game trees with different CA values and preserve their independent decoded comments.
-- [ ] Run `make test-core`; expect the complete core suite to pass.
-- [ ] Commit decoding, generated tables and tests.
+- [x] Add failing tests with hand-checked byte literals for all codecs, CA aliases, invalid UTF-8, missing/wrong declarations, ambiguous short text and explicit manual override/reset.
+- [x] Implement strict decoding and conservative detection. Generate single-byte mapping tables from Python's codec database; no iconv dependency is needed on the device.
+- [x] Test two game trees with different CA values and preserve their independent decoded comments.
+- [x] Run `make test-core`; expect the complete core suite to pass.
+- [x] Commit decoding, generated tables and tests.
 
 ### Task 3: Preserve files and register associations
 
 **Interfaces:** `AssociationResult update_association(config_path, install)` merges only `era-sgf.app`. `load_state`/`save_state` store game index, node index, codec and fingerprint for a specific path. `read_file` enforces the parser's size limit; `fingerprint` identifies source contents.
 
-- [ ] Add failing integration cases for absent/existing config, other SGF handlers, repeated install/uninstall, backups, symlink refusal, filenames with spaces/Cyrillic and stale source fingerprints.
-- [ ] Implement atomic same-directory writes and checked backups before changing associations. Keep state under an application-owned directory.
-- [ ] Add the `era-sgf-inspect` host executable so integration tests exercise the same production operations as the reader.
-- [ ] Run `make test`; expect core and integration suites to pass, and assert original SGF bytes are unchanged.
-- [ ] Commit storage and association support.
+- [x] Add failing integration cases for absent/existing config, other SGF handlers, repeated install/uninstall, backups, symlink refusal, filenames with spaces/Cyrillic and stale source fingerprints.
+- [x] Implement atomic same-directory writes and checked backups before changing associations. Keep state under an application-owned directory.
+- [x] Add the `era-sgf-inspect` host executable so integration tests exercise the same production operations as the reader.
+- [x] Run `make test`; expect core and integration suites to pass, and assert original SGF bytes are unchanged.
+- [x] Commit storage and association support.
 
 ### Task 4: Render and integrate InkView
 
 **Interfaces:** `Scene make_scene(const ViewModel&, int width, int height)` returns drawing operations and control rectangles; the SVG and InkView backends consume identical geometry. `pocketbook.cpp` adapts these models to the SDK and dispatches user actions through `Viewer`.
 
-- [ ] Add failing bounds tests for 600×800, Era 1264×1680 and landscape layouts, and interaction tests for branch selection and comment paging.
-- [ ] Implement high-contrast board rendering, marks, metadata/comments, page-turn navigation, variation/encoding menus, game selection, recent files and directory browsing.
-- [ ] Add installation/removal menu actions and explicit installer/uninstaller launch modes.
-- [ ] Render and inspect SVG/PNG previews containing Russian text and a branch; run `make test`.
-- [ ] Cross-compile using the official B288 SDK, inspect the ELF architecture, interpreter and runtime dependencies, and resolve build errors against the actual headers.
-- [ ] Commit the UI and build tooling. Record hardware verification as pending.
+- [x] Add failing bounds tests for 600×800, Era 1264×1680 and landscape layouts, and interaction tests for branch selection and comment paging.
+- [x] Implement high-contrast board rendering, marks, metadata/comments, page-turn navigation, variation/encoding menus, game selection, recent files and directory browsing.
+- [x] Add installation/removal menu actions and explicit installer/uninstaller launch modes.
+- [x] Render and inspect SVG/PNG previews containing Russian text and a branch; run `make test`.
+- [x] Cross-compile using the official B288 SDK, inspect the ELF architecture, interpreter and runtime dependencies, and resolve build errors against the actual headers.
+- [x] Commit the UI and build tooling. Record hardware verification as pending.
 
 ### Task 5: Package and publish the experimental implementation
 
 **Interfaces:** `make package` builds a ZIP with app, association launchers, synthetic sample and installation/license notices; scripts verify expected files and generate SHA-256 checksums.
 
-- [ ] Add a packaging integration test which opens the archive, validates executable names and excludes SDK/private data.
-- [ ] Implement packaging, host CI, reproducible SDK setup instructions and bilingual install/encoding documentation.
-- [ ] Run the complete tests, sanitizers, host preview checks and ARM/package verification. Obtain one independent code review and fix material findings with regression tests.
-- [ ] Commit the completed implementation, publish the feature branch and create a reviewable pull request. Publishing a stable release or claiming hardware compatibility is not part of this step.
+- [x] Add a packaging integration test which opens the archive, validates executable names and excludes SDK/private data.
+- [x] Implement packaging, host CI, reproducible SDK setup instructions and bilingual install/encoding documentation.
+- [x] Run the complete tests, sanitizers, host preview checks and ARM/package verification. Obtain one independent code review and fix material findings with regression tests.
+- [x] Commit the completed implementation, publish the feature branch and create a reviewable pull request. Publishing a stable release or claiming hardware compatibility is not part of this step.
 
 ## Execution decisions
 
