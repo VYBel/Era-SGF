@@ -2,7 +2,7 @@
 
 Date: 2026-11-01
 
-Status: proposal for the first implementation; no device build has been validated.
+Status: approved for implementation on 2026-11-01; no device build has been validated.
 
 ## Intent and agreed requirements
 

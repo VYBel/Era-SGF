@@ -5,6 +5,7 @@
 /sdk/
 /.sdk/
 /vendor-sdk/
+/.superpowers/
 CMakeUserPresets.json
 compile_commands.json
 *.app
