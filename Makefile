@@ -3,7 +3,7 @@ CPPFLAGS += -Iinclude
 CXXFLAGS ?= -O2 -g
 CXXFLAGS += -std=c++17 -Wall -Wextra -Wpedantic
 BUILD ?= build
-CORE = src/sgf.cpp src/viewer.cpp
+CORE = src/sgf.cpp src/viewer.cpp src/encoding.cpp
 HEADERS = $(wildcard include/erasgf/*.hpp)
 
 .PHONY: all test test-core clean

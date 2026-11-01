@@ -1,6 +1,8 @@
 #include "erasgf/sgf.hpp"
 #include "erasgf/viewer.hpp"
+#include "erasgf/encoding.hpp"
 #include <functional>
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 
@@ -111,6 +113,51 @@ int main() {
         const auto p = replay(c.games[0], 1);
         CHECK(p.at(0, 0) == Stone::empty);
         CHECK(p.white_captures == 1);
+    });
+    test("all initial Cyrillic codecs decode independently checked bytes", [] {
+        CHECK(decode_text("\xcf\xf0\xe8\xe2\xe5\xf2, \xb8\xe6!", "cp1251") == "Привет, ёж!");
+        CHECK(decode_text("\xf0\xd2\xc9\xd7\xc5\xd4, \xa3\xd6!", "koi8-r") == "Привет, ёж!");
+        CHECK(decode_text("\x8f\xe0\xa8\xa2\xa5\xe2, \xf1\xa6!", "cp866") == "Привет, ёж!");
+        CHECK(decode_text("\xbf\xe0\xd8\xd2\xd5\xe2, \xf1\xd6!", "iso-8859-5") == "Привет, ёж!");
+        CHECK(decode_text("Caf\xe9", "latin1") == "Café");
+        CHECK(decode_text("\xef\xbb\xbfПривет", "utf8") == "Привет");
+    });
+    test("invalid Unicode and undefined legacy bytes are never silently replaced", [] {
+        for (const auto& s : {"\x80", "\xc0\xaf", "\xed\xa0\x80", "\xf4\x90\x80\x80", "\xf0\x9f\x92"}) throws([&] { decode_text(s, "UTF-8"); });
+        throws([] { decode_text("\x98", "cp1251"); });
+        throws([] { decode_text("text", "UTF-16"); });
+    });
+    test("manual codec wins over a wrong CA and resetting restores Auto", [] {
+        const std::string raw = "\xcf\xf0\xe8\xe2\xe5\xf2";
+        throws([&] { choose_encoding(raw, "UTF-8"); });
+        CHECK(choose_encoding(raw, "UTF-8", "CP1251").name == "Windows-1251");
+        CHECK(choose_encoding("Привет", "UTF-8", "auto").name == "UTF-8");
+        CHECK(normalize_encoding(" WINDOWS_1251 ") == "Windows-1251");
+    });
+    test("automatic detection handles synthetic legacy records without CA", [] {
+        const std::pair<const char*, const char*> codecs[] = {{"windows-1251", "Windows-1251"}, {"koi8-r", "KOI8-R"}, {"cp866", "CP866"}, {"iso-8859-5", "ISO-8859-5"}, {"utf-8", "UTF-8"}};
+        for (const auto& codec : codecs) {
+            std::ifstream f(std::string("tests/fixtures/") + codec.first + "-auto.sgf", std::ios::binary);
+            CHECK(f.good());
+            std::string raw((std::istreambuf_iterator<char>(f)), {});
+            auto c = parse_sgf(raw);
+            const auto choice = choose_encoding(game_text_sample(c.games[0]), "");
+            CHECK(choice.name == codec.second);
+            CHECK(decode_text(c.games[0].nodes[0].value("C"), choice.name) == "Привет, ёж! Чёрные окружили белую группу. Разбор партии и варианты продолжения.");
+        }
+    });
+    test("ambiguous short non-UTF text exposes uncertainty", [] {
+        const auto choice = choose_encoding("\xe9", "");
+        CHECK(choice.uncertain);
+        CHECK(choice.name == "ISO-8859-1");
+        CHECK(choose_encoding("ASCII text", "").name == "UTF-8");
+    });
+    test("each game tree in a collection has its own declared charset", [] {
+        auto c = parse_sgf("(;CA[CP1251]C[\xcf\xf0\xe8\xe2\xe5\xf2])(;CA[KOI8-R]C[\xf0\xd2\xc9\xd7\xc5\xd4])");
+        for (const auto& g : c.games) {
+            const auto e = choose_encoding(game_text_sample(g), g.nodes[0].value("CA"));
+            CHECK(decode_text(g.nodes[0].value("C"), e.name) == "Привет");
+        }
     });
     std::cout << (total - failures) << '/' << total << " tests passed\n";
     return failures == 0 ? 0 : 1;
