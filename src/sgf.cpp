@@ -104,10 +104,14 @@ Collection parse_sgf(StringView input, const ParseLimits& limits) {
 }
 
 std::string game_text_sample(const Game& game) {
+    static const std::vector<std::string> text_properties{
+        "C", "GC", "N", "PB", "PW", "GN", "EV", "PC", "AN", "LB",
+        "BR", "WR", "DT", "RO", "RU", "RE", "SO", "US", "CP", "BT", "WT", "ON", "OT", "AP"
+    };
     std::string sample;
     for (const auto& node : game.nodes) {
         for (const auto& p : node.properties) {
-            if (p.name != "C" && p.name != "GC" && p.name != "PB" && p.name != "PW" && p.name != "GN" && p.name != "EV" && p.name != "PC" && p.name != "AN" && p.name != "LB") continue;
+            if (std::find(text_properties.begin(), text_properties.end(), p.name) == text_properties.end()) continue;
             for (const auto& v : p.values) { sample += v; sample += '\n'; }
         }
         if (sample.size() >= 65536) break; // Keep complete values: never split a UTF-8 character.

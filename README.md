@@ -6,7 +6,7 @@ An independent SGF viewer for PocketBook e-readers, starting with **PocketBook E
 
 ## Status
 
-**Experimental version 0.1.0. Native ARM build and desktop tests pass; physical-device testing is pending.**
+**Experimental version 0.1.1. Native ARM build and desktop tests pass; physical-device testing is pending.**
 
 Era-SGF is a native PocketBook application built with the InkView SDK.
 It launches from the device's Applications menu and can register a handler for `.sgf` files.

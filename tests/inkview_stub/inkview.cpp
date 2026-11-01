@@ -23,6 +23,7 @@ void InkViewMain(iv_handler handler) {
         else if (event == "back") handler(EVT_KEYPRESS, IV_KEY_BACK, 0);
         else if (event == "rotate") { orientation = 1; handler(EVT_ORIENTATION, 1, 0); }
         else if (event.rfind("select:", 0) == 0 && selection) { auto callback = selection; selection = nullptr; callback(std::stoi(event.substr(7))); }
+        else if (event.rfind("tap:", 0) == 0) { const auto comma = event.find(','); handler(EVT_POINTERUP, std::stoi(event.substr(4, comma - 4)), std::stoi(event.substr(comma + 1))); }
         else if (event == "hide") handler(EVT_HIDE, 0, 0);
         else if (event == "show") handler(EVT_SHOW, 0, 0);
         else if (event == "close") closed = true;

@@ -5,7 +5,7 @@
 
 using namespace erasgf;
 #ifndef ERA_SGF_VERSION
-#define ERA_SGF_VERSION "0.1.0"
+#define ERA_SGF_VERSION "dev"
 #endif
 int main(int argc, char** argv) {
     try {

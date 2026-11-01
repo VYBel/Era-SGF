@@ -14,7 +14,7 @@
 using namespace erasgf;
 namespace {
 #ifndef ERA_SGF_VERSION
-#define ERA_SGF_VERSION "0.1.0"
+#define ERA_SGF_VERSION "dev"
 #endif
 constexpr const char* version = ERA_SGF_VERSION;
 enum class Menu { main, files, variants, encodings, games };
@@ -137,12 +137,12 @@ private:
     void open_file(const std::string& path) {
         const auto raw = read_file(path);
         auto next = std::make_unique<Viewer>(parse_sgf(raw));
+        persist();
         auto restored = load_state(state_dir, path, raw);
         if (restored) {
             try { next->select_game(restored->game); next->select_node(restored->node); }
             catch (const std::exception&) { restored = none; next->select_game(0); }
         }
-        persist();
         viewer = std::move(next); file = path; source_id = fingerprint(raw);
         manual = restored ? restored->encoding : "auto";
         full_comment = false; information = false; comment_page = 0; dirty = true;
@@ -197,7 +197,23 @@ private:
     }
     void draw(bool full = false) {
         const int width = ScreenWidth(), height = ScreenHeight();
-        Scene next = make_scene(model(), width, height);
+        ViewModel presentation;
+        try { presentation = model(); }
+        catch (const std::exception& e) {
+            // Detection uses a bounded sample. A later text value may still fail;
+            // preserve an operable screen so touch-only readers can select a codec.
+            presentation.title = file.empty() ? "Era-SGF" : basename(file);
+            presentation.subtitle = "Ошибка текста · Меню → Кодировка";
+            presentation.comment = std::string(e.what()) + "\n\nМеню → Кодировка: выбери кодировку этого файла.";
+            presentation.full_comment = full_comment;
+            if (viewer) {
+                presentation.position = viewer->position();
+                for (auto& mark : presentation.position.marks) if (mark.kind == MarkKind::label) mark.label = "?";
+                presentation.has_previous = viewer->node().parent != no_node;
+                presentation.has_next = !viewer->node().children.empty();
+            } else { presentation.position.size = 9; presentation.position.cells.assign(81, Stone::empty); }
+        }
+        Scene next = make_scene(presentation, width, height);
         int left = width, top = height, right = 0, bottom = 0;
         auto changed_bounds = [&](const Scene& a, const Scene& b) {
             for (const auto& op : a.drawing) if (std::none_of(b.drawing.begin(), b.drawing.end(), [&](const DrawOp& other) { return same(op, other); })) {

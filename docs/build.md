@@ -51,7 +51,7 @@ linked statically; InkView and libc remain supplied by the reader firmware.
 Outputs:
 
 - `build/pocketbook/era-sgf.app`: stripped ARM ELF executable.
-- `dist/Era-SGF-0.1.0-experimental-b288.zip`: install archive.
+- `dist/Era-SGF-0.1.1-experimental-b288.zip`: install archive.
 - The adjacent `.zip.sha256`: archive checksum.
 
 For an already extracted compatible SDK, set `POCKETBOOK_SDK` to its `SDK-B288` directory

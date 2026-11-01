@@ -44,6 +44,30 @@ class DeviceAdapter(unittest.TestCase):
         self.assertIn('Привет, ёж!', trace)
         self.assertEqual(self.record.read_bytes(), before)
 
+    def test_node_name_only_encoding_error_keeps_a_touch_menu_and_can_be_fixed(self):
+        self.record.write_bytes('(;SZ[9]CA[UTF-8]N[Привет, ёж!])'.encode('cp1251'))
+        trace = self.run_ui('tap:1100,1600;select:107;select:202;close', self.record)
+        self.assertIn('FRAME\n', trace)
+        self.assertIn('Привет, ёж!', trace)
+
+    def test_encoding_error_beyond_detection_sample_keeps_touch_recovery(self):
+        prefix = '(;SZ[9]CA[UTF-8]C[' + 'x' * 66000 + '];N['
+        self.record.write_bytes(prefix.encode() + 'Привет, ёж!'.encode('cp1251') + b'])')
+        self.run_ui('next;close', self.record)
+        # Resume on the bad node: no previous frame is available to mask the failure.
+        trace = self.run_ui('tap:1100,1600;select:107;select:202;close', self.record)
+        self.assertIn('Привет, ёж!', trace)
+
+    def test_automatic_detection_includes_node_names(self):
+        self.record.write_bytes('(;SZ[9]N[Привет, ёж! Разбор партии и варианты продолжения.])'.encode('cp1251'))
+        trace = self.run_ui('close', self.record)
+        self.assertIn('Привет, ёж!', trace)
+
+    def test_reopening_current_record_preserves_fresh_position(self):
+        trace = self.run_ui('next;next;menu;select:100;select:1002;close', self.record)
+        result = subprocess.run([INSPECT, str(self.record), '--state-dir', str(self.root / 'system/config/era-sgf')], capture_output=True, text=True)
+        self.assertEqual(json.loads(result.stdout)['node'], 2)
+
     def test_open_from_applications_without_a_launch_argument(self):
         # applications/ and system/ are the first two directory rows.
         trace = self.run_ui('menu;select:100;select:1002;close')
