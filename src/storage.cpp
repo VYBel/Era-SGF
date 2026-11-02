@@ -3,6 +3,7 @@
 #include <cerrno>
 #include <cstring>
 #include <cstdint>
+#include <ctime>
 #include <fcntl.h>
 #include <fstream>
 #include <iomanip>
@@ -10,6 +11,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <sys/stat.h>
+#include <sys/vfs.h>
 #include <unistd.h>
 #include <vector>
 
@@ -44,7 +46,15 @@ void atomic_write(const std::string& path, const std::string& text) {
     int fd = ::mkstemp(temp.data());
     if (fd < 0) io_error("Cannot create temporary file for " + path);
     try {
-        if (exists && ::fchmod(fd, info.st_mode & 0777) != 0) io_error("Cannot preserve file permissions");
+        if (exists) {
+            struct statfs filesystem{};
+            if (::fstatfs(fd, &filesystem) != 0) io_error("Cannot inspect settings filesystem");
+            // FAT ownership/modes come from the mount, not from each file. The
+            // reader's application UID may write there but cannot chmod a file
+            // owned by the mount UID. Keep real POSIX-mode failures fatal.
+            constexpr long fat_magic = 0x4d44;
+            if (filesystem.f_type != fat_magic && ::fchmod(fd, info.st_mode & 0777) != 0) io_error("Cannot preserve file permissions");
+        }
         write_all(fd, text);
         if (::close(fd) != 0) { fd = -1; io_error("Cannot close file"); }
         fd = -1;
@@ -61,7 +71,7 @@ void ensure_directory(const std::string& path) {
         current += part;
         if (::mkdir(current.c_str(), 0700) != 0 && errno != EEXIST) io_error("Cannot create " + current);
         struct stat info{};
-        if (::stat(current.c_str(), &info) != 0 || !S_ISDIR(info.st_mode)) throw std::runtime_error("Not a directory: " + current);
+        if (::lstat(current.c_str(), &info) != 0 || !S_ISDIR(info.st_mode)) throw std::runtime_error("Not a directory: " + current);
     }
 }
 std::string backup(const std::string& path, const std::string& contents) {
@@ -152,6 +162,30 @@ std::size_t state_number(const std::string& value) {
     if (result > 100000) throw std::runtime_error("Saved index exceeds parser limits");
     return result;
 }
+}
+
+void make_directories(const std::string& path) { ensure_directory(path); }
+void write_file_atomic(const std::string& path, const std::string& bytes) {
+    path_check(path);
+    const auto slash = path.find_last_of('/');
+    if (slash != std::string::npos) ensure_directory(slash ? path.substr(0, slash) : "/");
+    atomic_write(path, bytes);
+}
+void record_diagnostic(const std::string& directory, const std::string& message) noexcept {
+    int fd = -1;
+    try {
+        ensure_directory(directory);
+        const auto path = directory + "/diagnostics.log";
+        fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW, 0600);
+        if (fd < 0) return;
+        struct stat info{};
+        if (::fstat(fd, &info) != 0 || !S_ISREG(info.st_mode)) { ::close(fd); return; }
+        if (info.st_size > 32768 && ::ftruncate(fd, 0) != 0) { ::close(fd); return; }
+        const auto now = std::time(nullptr); std::tm time{}; char stamp[32]{};
+        if (::gmtime_r(&now, &time)) std::strftime(stamp, sizeof(stamp), "%Y-%m-%dT%H:%M:%SZ ", &time);
+        write_all(fd, std::string(stamp) + message.substr(0, 2048) + '\n');
+        ::close(fd); fd = -1;
+    } catch (...) { if (fd >= 0) ::close(fd); }
 }
 
 std::string read_file(const std::string& path, std::size_t max_bytes) {

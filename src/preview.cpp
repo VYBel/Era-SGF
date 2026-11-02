@@ -17,8 +17,10 @@ int main(int argc, char** argv) {
         ViewModel model; model.position = viewer.position();
         for (auto& mark : model.position.marks) mark.label = decode_text(mark.label, e.name);
         const auto& root = viewer.game().nodes[0];
-        model.title = decode_text(root.value("PB"), e.name) + " — " + decode_text(root.value("PW"), e.name);
-        model.subtitle = "Ход " + std::to_string(model.position.move_number) + " · " + e.name + " · Era-SGF " + ERA_SGF_VERSION;
+        model.title = "B: " + decode_text(root.value("PB"), e.name) + " - W: " + decode_text(root.value("PW"), e.name);
+        model.has_game = true;
+        model.move_caption = "Ход " + std::to_string(model.position.move_number);
+        if (viewer.at_main_line_end() && !root.value("RE").empty()) model.result_caption = "Результат: " + describe_result(decode_text(root.value("RE"), e.name));
         model.comment = decode_text(viewer.node().value("C"), e.name);
         model.has_previous = viewer.node().parent != no_node; model.has_next = !viewer.node().children.empty();
         model.comment_page = argc > 6 ? std::stoul(argv[6]) : 0; model.full_comment = argc > 7 && std::string(argv[7]) == "1";

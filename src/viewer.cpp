@@ -157,4 +157,70 @@ bool Viewer::previous_branch() {
     while (game().nodes[target].parent != no_node && game().nodes[target].children.size() < 2) target = game().nodes[target].parent;
     node_ = target; return true;
 }
+std::vector<std::size_t> Viewer::selected_path() const {
+    std::vector<std::size_t> path;
+    std::size_t current = 0;
+    while (true) {
+        if (path.size() >= game().nodes.size()) throw std::runtime_error("Cycle in SGF tree");
+        path.push_back(current);
+        const auto& children = game().nodes.at(current).children;
+        if (children.empty()) return path;
+        current = children.at(chosen_.at(current));
+    }
+}
+int Viewer::last_move_number() const {
+    int moves = 0;
+    for (const auto index : selected_path()) {
+        const auto& node = game().nodes[index];
+        moves += node.find("B") || node.find("W");
+    }
+    return moves;
+}
+bool Viewer::seek_move(int number) {
+    if (number < 0) throw std::runtime_error("Move number is out of range");
+    int moves = 0;
+    std::size_t target = number == 0 ? 0 : no_node;
+    for (const auto index : selected_path()) {
+        const auto& node = game().nodes[index];
+        moves += node.find("B") || node.find("W");
+        if (target == no_node && moves == number) target = index;
+    }
+    if (number > moves || target == no_node) throw std::runtime_error("Move number is out of range");
+    if (target == node_ || (number != 0 && position().move_number == number)) return false;
+    select_node(target); return true;
+}
+bool Viewer::jump_moves(int delta) {
+    if (!delta) return false;
+    const auto before = node_;
+    const long long requested = static_cast<long long>(position().move_number) + delta;
+    if (requested <= 0) begin();
+    else if (requested >= last_move_number()) end();
+    else return seek_move(static_cast<int>(requested));
+    return node_ != before;
+}
+bool Viewer::at_main_line_end() const {
+    if (!node().children.empty()) return false;
+    for (auto index = node_; index != 0;) {
+        const auto parent = game().nodes[index].parent;
+        if (game().nodes[parent].children.front() != index) return false;
+        index = parent;
+    }
+    return true;
+}
+std::string describe_result(const std::string& result) {
+    if (result.empty()) return {};
+    if (result == "0" || result == "Draw") return "Ничья";
+    if (result == "Void") return "Без результата";
+    if (result == "?") return "Неизвестен";
+    if (result.size() >= 2 && (result[0] == 'B' || result[0] == 'W') && result[1] == '+') {
+        const std::string winner = result[0] == 'B' ? "Победа чёрных" : "Победа белых";
+        const auto reason = result.substr(2);
+        if (reason.empty()) return winner;
+        if (reason == "R" || reason == "Resign") return winner + ": сдача";
+        if (reason == "T" || reason == "Time") return winner + ": время";
+        if (reason == "F" || reason == "Forfeit") return winner + ": техническая";
+        return winner + ": +" + reason;
+    }
+    return result;
+}
 } // namespace erasgf

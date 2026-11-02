@@ -1,6 +1,6 @@
 # Contributing
 
-Era-SGF has an experimental implementation. Please discuss a feature or substantial change
+Please discuss a feature or substantial change
 in an issue before implementing it, and read [docs/design.md](docs/design.md) for the intended scope.
 
 ## Principles

@@ -33,33 +33,23 @@ class Packaging(unittest.TestCase):
             return next((self.directory / 'out').glob('*.zip'))
         return result
 
-    def test_archive_contains_only_installable_files_with_executable_launchers(self):
+    def test_archive_contains_one_executable_application_without_installer_shortcuts(self):
         path = self.package()
         with zipfile.ZipFile(path) as archive:
             names = set(archive.namelist())
             self.assertIn('applications/era-sgf.app', names)
-            self.assertIn('applications/era-sgf-install.app', names)
-            self.assertIn('applications/era-sgf-uninstall.app', names)
+            self.assertEqual(sorted(name for name in names if name.endswith('.app')), ['applications/era-sgf.app'])
+            for name in ('era-sgf.bmp', 'era-sgf-focused.bmp'):
+                icon = 'applications/icons/' + name
+                data = archive.read(icon)
+                self.assertEqual(data, (ROOT / 'assets/icons' / name).read_bytes())
+                self.assertEqual(data[:2], b'BM')
+                self.assertEqual(struct.unpack_from('<iiHHI', data, 18), (106, 112, 1, 8, 0))
             self.assertIn('Books/Era-SGF/first-steps.sgf', names)
             self.assertEqual(archive.read('applications/era-sgf.app'), self.binary.read_bytes())
             self.assertTrue(archive.getinfo('applications/era-sgf.app').external_attr >> 16 & stat.S_IXUSR)
             self.assertTrue(all(not any(part in name for part in ('.sdk/', '.git/', 'state/', '.env')) for name in names))
         self.assertTrue(path.with_suffix('.zip.sha256').exists())
-
-    def test_launcher_resolves_its_own_path_with_spaces_and_cyrillic(self):
-        path = self.package()
-        target = self.directory / 'установка с пробелами'
-        with zipfile.ZipFile(path) as archive:
-            archive.extractall(target)
-        app = target / 'applications/era-sgf.app'
-        app.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$ERA_SGF_ARG_FILE"\n')
-        app.chmod(0o755)
-        output = self.directory / 'arguments'
-        for launcher, expected in [('era-sgf-install.app', '--install'), ('era-sgf-uninstall.app', '--uninstall')]:
-            env = dict(os.environ, ERA_SGF_ARG_FILE=str(output))
-            result = subprocess.run(['/bin/sh', str(target / 'applications' / launcher)], env=env)
-            self.assertEqual(result.returncode, 0)
-            self.assertEqual(output.read_text(), expected + '\n')
 
     def test_wrong_elf_architecture_or_hard_float_is_refused(self):
         data = bytearray(self.binary.read_bytes())

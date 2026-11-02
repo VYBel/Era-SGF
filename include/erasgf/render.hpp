@@ -16,20 +16,26 @@ struct DrawOp {
     int font = 16;
     std::string text;
     bool centered = false;
+    int stroke_width = 1;
 };
-enum class Action { previous, next, variations, menu, comment_previous, comment_next, toggle_comment };
+enum class Action { information, refresh, previous, next, variations, menu, comment_previous, comment_next, toggle_comment, autoplay, first, back_ten, go_to_move, forward_ten, last };
 struct Control { Rect bounds; Action action; };
 struct BranchHint { Optional<Point> point; std::string label; };
 struct ViewModel {
     Position position;
     std::string title = "Era-SGF";
     std::string subtitle;
+    std::string move_caption;
     std::string comment;
+    std::string result_caption;
+    bool about = false;
     std::vector<BranchHint> branches;
     std::size_t comment_page = 0;
     bool full_comment = false;
     bool has_previous = false;
     bool has_next = false;
+    bool autoplay = false;
+    bool has_game = false;
 };
 struct Scene {
     std::vector<DrawOp> drawing;

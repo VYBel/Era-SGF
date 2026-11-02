@@ -92,6 +92,20 @@ class FileOperations(unittest.TestCase):
             state.write_text('invalid state\n')
         self.assertEqual(command(path, '--state-dir', state_dir)['node'], 0)
 
+    def test_host_catalogue_command_indexes_reader_folders_and_preserves_game_bytes(self):
+        games = self.root / 'sgf/1969'
+        games.mkdir(parents=True)
+        record = games / 'game.sgf'
+        original = b'(;SZ[9]PB[Black]PW[White]DT[1969-11-14];B[aa])'
+        record.write_bytes(original)
+        result = command('--catalogue', self.root)
+        self.assertEqual(result['files'], 1)
+        self.assertEqual(result['years'], {'1969': 1})
+        self.assertEqual(result['viewed'], 0)
+        self.assertEqual(result['errors'], 0)
+        self.assertTrue((self.root / 'system/config/era-sgf/library.db').is_file())
+        self.assertEqual(record.read_bytes(), original)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

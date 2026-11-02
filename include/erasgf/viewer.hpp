@@ -19,6 +19,7 @@ struct Position {
     Stone at(int x, int y) const;
 };
 
+std::string describe_result(const std::string& result);
 Position replay(const Game& game, std::size_t node);
 
 class Viewer {
@@ -36,11 +37,16 @@ public:
     void begin();
     void end();
     bool previous_branch();
+    int last_move_number() const;
+    bool at_main_line_end() const;
+    bool seek_move(int number);
+    bool jump_moves(int delta);
     Position position() const { return replay(game(), node_); }
 private:
     Collection collection_;
     std::size_t game_ = 0;
     std::size_t node_ = 0;
     std::vector<std::size_t> chosen_;
+    std::vector<std::size_t> selected_path() const;
 };
 } // namespace erasgf

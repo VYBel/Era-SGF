@@ -2,6 +2,8 @@
 #include "erasgf/viewer.hpp"
 #include "erasgf/encoding.hpp"
 #include "erasgf/render.hpp"
+#include "erasgf/png.hpp"
+#include <algorithm>
 #include <functional>
 #include <fstream>
 #include <iostream>
@@ -167,19 +169,23 @@ int main() {
     });
     test("shared screen geometry fits small, Era and landscape screens", [] {
         Viewer viewer(parse_sgf("(;SZ[19]AB[dd]AW[pp]C[Комментарий])"));
-        ViewModel model; model.position = viewer.position(); model.comment = "Комментарий к партии";
-        for (const auto dimensions : {std::pair<int, int>{600, 800}, {1264, 1680}, {1680, 1264}}) {
+        ViewModel model; model.position = viewer.position(); model.comment = "Комментарий к партии"; model.result_caption = "Результат: Победа белых: +2.5";
+        model.has_game = true; model.has_previous = true; model.has_next = true;
+        for (const auto dimensions : {std::pair<int, int>{320, 320}, {320, 480}, {600, 800}, {1264, 1680}, {1680, 1264}}) {
             const auto s = make_scene(model, dimensions.first, dimensions.second);
             CHECK(s.board.w > 0); CHECK(s.comments.h > 0);
             for (const auto& c : s.controls) {
+                CHECK(c.bounds.w > 0 && c.bounds.h > 0);
                 CHECK(c.bounds.x >= 0 && c.bounds.y >= 0);
                 CHECK(c.bounds.x + c.bounds.w <= dimensions.first);
                 CHECK(c.bounds.y + c.bounds.h <= dimensions.second);
             }
             for (const auto& op : s.drawing) {
-                CHECK(op.bounds.x >= 0 && op.bounds.y >= 0);
-                CHECK(op.bounds.x + op.bounds.w <= dimensions.first);
-                CHECK(op.bounds.y + op.bounds.h <= dimensions.second);
+                if (op.kind != DrawKind::line) CHECK(op.bounds.w >= 0 && op.bounds.h >= 0);
+                CHECK(std::min(op.bounds.x, op.bounds.x + op.bounds.w) >= 0);
+                CHECK(std::min(op.bounds.y, op.bounds.y + op.bounds.h) >= 0);
+                CHECK(std::max(op.bounds.x, op.bounds.x + op.bounds.w) <= dimensions.first);
+                CHECK(std::max(op.bounds.y, op.bounds.y + op.bounds.h) <= dimensions.second);
             }
         }
     });
@@ -202,6 +208,145 @@ int main() {
         auto full = make_scene(model, 600, 800);
         CHECK(full.comments.h > s.comments.h);
         CHECK(full.comment_pages < s.comment_pages);
+    });
+    test("an unbranched position has no branch hit target and uses the wider board", [] {
+        ViewModel model; model.position = replay(parse_sgf("(;SZ[19])").games[0], 0);
+        model.branches.push_back({none, "1"});
+        const auto s = make_scene(model, 1264, 1680);
+        CHECK(s.board.w >= 1160);
+        for (const auto& c : s.controls) CHECK(c.action != Action::variations);
+        bool centered_move = false;
+        for (const auto& op : s.drawing) {
+            CHECK(op.text.find("Комментарий 1/1") == std::string::npos);
+            CHECK(op.text.find("нет комментария") == std::string::npos);
+            if (op.text == "Ход 0") {
+                CHECK(op.centered); CHECK(op.bounds.y >= s.board.y + s.board.h);
+                centered_move = true;
+            }
+        }
+        CHECK(centered_move);
+    });
+    test("ten-move navigation skips comments counts passes and clamps at endpoints", [] {
+        Viewer v(parse_sgf("(;SZ[9];C[before];B[aa];C[note];W[];C[more];B[bb];W[cc];B[dd];W[ee];B[ff];W[gg];B[hh];W[ii];B[ab];W[bc])"));
+        CHECK(v.last_move_number() == 12);
+        CHECK(v.next()); CHECK(v.position().move_number == 0);
+        CHECK(v.seek_move(0)); CHECK(v.node_index() == 0);
+        CHECK(v.jump_moves(10)); CHECK(v.position().move_number == 10); CHECK(v.node().value("W") == "ii");
+        CHECK(v.jump_moves(-10)); CHECK(v.node_index() == 0);
+        CHECK(v.seek_move(2)); CHECK(v.node().find("W")); CHECK(v.node().value("W").empty()); CHECK(!v.position().last_move);
+        CHECK(v.jump_moves(100)); CHECK(v.position().move_number == 12); CHECK(!v.jump_moves(10));
+        CHECK(v.jump_moves(-100)); CHECK(v.node_index() == 0);
+    });
+    test("seeking a move retains the chosen continuation and rejects invalid input atomically", [] {
+        Viewer v(parse_sgf("(;SZ[9];B[aa](;W[bb];B[cc])(;W[dd];B[ee];W[ff]))"));
+        CHECK(v.next()); CHECK(v.next(1)); v.begin();
+        CHECK(v.last_move_number() == 4);
+        CHECK(v.seek_move(3)); CHECK(v.node().value("B") == "ee");
+        const auto selected = v.node_index();
+        throws([&] { v.seek_move(999); }); CHECK(v.node_index() == selected);
+        throws([&] { v.seek_move(-1); }); CHECK(v.node_index() == selected);
+        v.begin(); v.end(); CHECK(v.node().value("W") == "ff");
+        CHECK(v.seek_move(2)); CHECK(v.node().value("W") == "dd");
+    });
+    test("a jump that encounters an invalid later move leaves the current position intact", [] {
+        Viewer v(parse_sgf("(;SZ[9];B[aa];W[aa])"));
+        throws([&] { v.jump_moves(10); }); CHECK(v.node_index() == 0);
+        CHECK(v.seek_move(1));
+        throws([&] { v.jump_moves(10); }); CHECK(v.node_index() == 1);
+    });
+    test("all five move controls occupy their own row immediately below the board", [] {
+        ViewModel model; model.position = replay(parse_sgf("(;SZ[19])").games[0], 0);
+        model.position.move_number = 5; model.has_game = true;
+        model.has_previous = true; model.has_next = true;
+        const auto scene = make_scene(model, 1264, 1680);
+        std::vector<Rect> controls;
+        for (const auto action : {Action::first, Action::back_ten, Action::go_to_move, Action::forward_ten, Action::last}) {
+            const auto found = std::find_if(scene.controls.begin(), scene.controls.end(), [&](const Control& c) { return c.action == action; });
+            CHECK(found != scene.controls.end()); CHECK(found->bounds.y >= scene.board.y + scene.board.h);
+            controls.push_back(found->bounds);
+        }
+        for (std::size_t i = 1; i < controls.size(); ++i) {
+            CHECK(controls[i].y == controls[0].y);
+            CHECK(controls[i - 1].x + controls[i - 1].w <= controls[i].x);
+        }
+    });
+    test("PNG preserves packed grayscale rows and ignores stride padding", [] {
+        for (unsigned depth : {1u, 2u, 4u, 8u}) {
+            const unsigned width = 5, height = 2, row = (width * depth + 7) / 8, stride = row + 3;
+            std::vector<unsigned char> pixels(stride * height, 0xee);
+            for (unsigned y = 0; y < height; ++y)
+                for (unsigned x = 0; x < row; ++x) pixels[y * stride + x] = (x + 1) * (y + 1) * 17;
+            const auto png = grayscale_png(width, height, depth, stride, pixels.data());
+            CHECK(png.substr(0, 8) == std::string("\x89PNG\r\n\x1a\n", 8));
+            CHECK(static_cast<unsigned char>(png[24]) == depth);
+            std::string compressed;
+            for (std::size_t offset = 8; offset + 12 <= png.size();) {
+                unsigned size = 0;
+                for (unsigned i = 0; i < 4; ++i) size = (size << 8) | static_cast<unsigned char>(png[offset + i]);
+                CHECK(offset + 12 + size <= png.size());
+                if (png.substr(offset + 4, 4) == "IDAT") compressed += png.substr(offset + 8, size);
+                offset += size + 12;
+            }
+            std::vector<unsigned char> raw((row + 1) * height);
+            uLongf size = raw.size();
+            CHECK(uncompress(raw.data(), &size, reinterpret_cast<const Bytef*>(compressed.data()), compressed.size()) == Z_OK);
+            CHECK(size == raw.size());
+            for (unsigned y = 0; y < height; ++y) {
+                CHECK(raw[y * (row + 1)] == 0);
+                for (unsigned x = 0; x < row; ++x) CHECK(raw[y * (row + 1) + 1 + x] == pixels[y * stride + x]);
+            }
+        }
+    });
+    test("PNG rejects colour bitmaps invalid dimensions and short scanlines", [] {
+        const unsigned char pixel = 0;
+        throws([&] { grayscale_png(1, 1, 24, 3, &pixel); });
+        throws([&] { grayscale_png(2, 1, 8, 1, &pixel); });
+        throws([&] { grayscale_png(0, 1, 8, 1, &pixel); });
+        throws([&] { grayscale_png(1, 1, 8, 1, nullptr); });
+        throws([&] { grayscale_png(8193, 1, 8, 8193, &pixel); });
+    });
+    test("arrow strokes and labels fit their buttons even on small screens with results", [] {
+        ViewModel model; model.position = replay(parse_sgf("(;SZ[9])").games[0], 0);
+        model.has_game = true; model.has_previous = true; model.has_next = true;
+        model.comment = "Comment"; model.result_caption = "Result";
+        for (int width : {320, 600, 1264}) {
+            const auto scene = make_scene(model, width, width);
+            for (const auto& control : scene.controls) {
+                if (control.action != Action::first && control.action != Action::back_ten && control.action != Action::forward_ten && control.action != Action::last) continue;
+                const auto& r = control.bounds;
+                bool inside = false;
+                for (const auto& op : scene.drawing) {
+                    if (op.kind == DrawKind::rectangle) {
+                        inside = op.bounds.x == r.x && op.bounds.y == r.y && op.bounds.w == r.w && op.bounds.h == r.h;
+                        continue;
+                    }
+                    if (!inside) continue;
+                    // The central move label follows back_ten; its own hit target covers it.
+                    if (op.kind == DrawKind::text && op.text != "10" && !op.text.empty()) break;
+                    CHECK(std::min(op.bounds.x, op.bounds.x + op.bounds.w) >= r.x);
+                    CHECK(std::max(op.bounds.x, op.bounds.x + op.bounds.w) <= r.x + r.w);
+                    if (op.kind == DrawKind::line) {
+                        CHECK(std::min(op.bounds.y, op.bounds.y + op.bounds.h) >= r.y);
+                        CHECK(std::max(op.bounds.y, op.bounds.y + op.bounds.h) <= r.y + r.h);
+                    }
+                }
+            }
+        }
+    });
+    test("game results preserve unknown values and distinguish resignation time and draws", [] {
+        CHECK(describe_result("").empty());
+        CHECK(describe_result("0") == "Ничья");
+        CHECK(describe_result("Void") == "Без результата");
+        CHECK(describe_result("?") == "Неизвестен");
+        CHECK(describe_result("B+R") == "Победа чёрных: сдача");
+        CHECK(describe_result("W+Time") == "Победа белых: время");
+        CHECK(describe_result("B+F") == "Победа чёрных: техническая");
+        CHECK(describe_result("W+") == "Победа белых");
+        CHECK(describe_result("custom result") == "custom result");
+        Viewer viewer(parse_sgf("(;SZ[9]RE[B+R];B[aa](;W[bb];C[Final comment])(;W[cc]))"));
+        CHECK(!viewer.at_main_line_end()); viewer.next(); viewer.next(1);
+        CHECK(!viewer.at_main_line_end()); viewer.previous(); viewer.next(0);
+        CHECK(!viewer.at_main_line_end()); viewer.next(); CHECK(viewer.at_main_line_end());
     });
     std::cout << (total - failures) << '/' << total << " tests passed\n";
     return failures == 0 ? 0 : 1;

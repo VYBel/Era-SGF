@@ -17,6 +17,8 @@ compile_commands.json
 /.idea/
 /.vscode/
 .DS_Store
+__pycache__/
+*.pyc
 *~
 
 # Personal records and device data stay local; public fixtures must be synthetic.

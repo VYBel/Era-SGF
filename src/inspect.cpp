@@ -1,7 +1,9 @@
 #include "erasgf/encoding.hpp"
+#include "erasgf/library.hpp"
 #include "erasgf/storage.hpp"
 #include "erasgf/viewer.hpp"
 #include <iostream>
+#include <map>
 
 using namespace erasgf;
 namespace {
@@ -23,6 +25,16 @@ std::size_t number(const std::string& text) {
 
 int main(int argc, char** argv) {
     try {
+        if (argc == 3 && std::string(argv[1]) == "--catalogue") {
+            const std::string root = argv[2];
+            Library library(root, root + "/system/config/era-sgf"); library.refresh();
+            std::map<std::string, std::size_t> years; std::size_t viewed = 0, errors = 0;
+            for (const auto& record : library.records()) { ++years[record.year]; viewed += record.viewed; errors += !record.problem.empty(); }
+            std::cout << "{\"files\":" << library.records().size() << ",\"viewed\":" << viewed << ",\"errors\":" << errors << ",\"years\":{";
+            bool first = true;
+            for (const auto& year : years) { if (!first) std::cout << ','; first = false; std::cout << json(year.first) << ':' << year.second; }
+            std::cout << "}}\n"; return 0;
+        }
         if (argc == 4 && std::string(argv[1]) == "--associate") {
             const std::string action = argv[3];
             if (action != "install" && action != "remove") throw std::runtime_error("Expected install or remove");

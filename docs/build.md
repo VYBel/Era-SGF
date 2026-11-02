@@ -3,7 +3,7 @@
 ## Desktop checks
 
 Requirements: Linux, GCC with libstdc++ and C++14 Library Fundamentals headers (GCC 6.3+),
-GNU Make and Python 3.8+. No downloaded C++ test framework is required.
+GNU Make, Python 3.9+ and zlib development headers (`zlib1g-dev` on Debian/Ubuntu). No downloaded C++ test framework is required.
 
 ```sh
 make test all
@@ -46,12 +46,12 @@ resolved targets stay inside this SDK. It does not disable the extractor's link 
 The canonical build uses the SDK's GCC 6.3, ARMv7, the soft-float calling convention and its
 glibc sysroot. A command-local library path loads the SDK compiler's host libraries; it does
 not change system libraries or your shell configuration. GCC C++ runtime libraries are
-linked statically; InkView and libc remain supplied by the reader firmware.
+linked statically, as is the SDK zlib used to compress PNG screenshots; InkView and libc remain supplied by the reader firmware.
 
 Outputs:
 
 - `build/pocketbook/era-sgf.app`: stripped ARM ELF executable.
-- `dist/Era-SGF-0.1.1-experimental-b288.zip`: install archive.
+- `dist/Era-SGF-1.0.1-b288.zip`: install archive, containing one `.app` and two BMP icons.
 - The adjacent `.zip.sha256`: archive checksum.
 
 For an already extracted compatible SDK, set `POCKETBOOK_SDK` to its `SDK-B288` directory
@@ -61,17 +61,34 @@ The Make package target uses the default output directory.
 An optional `cmake/pocketbook.cmake` toolchain is provided for contributors. The first local
 ARM artifact was built with the Make/Bash path above; cross-CMake is not yet separately validated.
 
+## Official SDK desktop emulator
+
+```sh
+make emulator-setup
+make emulator-build
+make emulator
+```
+
+This links the production adapter against the SDK's x86-64 InkView implementation.
+Pinned dependencies are extracted privately; no system installation is performed.
+See [emulator.md](emulator.md) for requirements, keyboard mapping and hardware limitations.
+
 ## Inspect and preview
 
 ```sh
 build/era-sgf-inspect examples/first-steps.sgf --node 1
 build/era-sgf-inspect tests/fixtures/windows-1251-auto.sgf --encoding cp1251
 build/era-sgf-preview examples/first-steps.sgf 1264 1680 1 > build/era-preview.svg
+build/era-sgf-inspect --catalogue /path/to/mounted/reader
+build/era-sgf-logos 1 > build/logo-1.svg
 ```
 
 The inspection output is JSON. Preview arguments are file, width, height, node, encoding,
 comment page and full-comment mode (`0` or `1`), in that order. Open the SVG in a browser.
 The preview uses shared scene geometry; physical fonts and display refresh still need a reader test.
+`--catalogue` explicitly refreshes the persistent reader catalogue and prints counts by year.
+It writes only `system/config/era-sgf/library.db`, with paths relative to the supplied root.
+The optional logo contact sheet generator is documented in [logos/README.md](logos/README.md).
 
 ## Sanitizers and generated fixtures
 
