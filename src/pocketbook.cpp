@@ -27,7 +27,7 @@ namespace {
 #define ERA_SGF_VERSION "dev"
 #endif
 constexpr const char* version = ERA_SGF_VERSION;
-enum class Menu { main, files, variants, encodings, games, library, library_filters, library_years, pauses, logos, game_actions, file_actions, settings, associations, navigation, refresh_settings };
+enum class Menu { main, files, variants, encodings, games, library, library_tools, library_years, pauses, logos, game_actions, file_actions, settings, associations, navigation, refresh_settings };
 struct Entry { std::string name; std::string path; bool directory; };
 std::string basename(const std::string& path) { const auto slash = path.find_last_of('/'); return path.substr(slash == std::string::npos ? 0 : slash + 1); }
 bool is_sgf(std::string name) {
@@ -57,29 +57,45 @@ public:
                 if (!launch_file.empty()) open_file(launch_file);
                 else if (launch_action.empty()) { if (auto last = load_last_file(state_dir)) open_file(*last); }
                 if (!launch_action.empty()) association(launch_action == "--install");
-            } else if (type == EVT_SHOW) { if (splash_visible) show_splash(); else draw(true); }
+            } else if (type == EVT_SHOW || type == EVT_FOREGROUND) {
+                resume_autoplay();
+                if (splash_visible) show_splash(); else if (library_visible) show_library(); else draw(true);
+            }
             else if (type == EVT_EXIT) finish(false);
-            else if (type == EVT_HIDE || type == EVT_BACKGROUND) { stop_autoplay(); ClearTimer(startup_callback); splash_visible = false; persist(); }
-            else if (type == EVT_ORIENTATION) { stop_autoplay(); ClearTimer(startup_callback); splash_visible = false; SetOrientation(p1); draw(true); }
+            else if (type == EVT_HIDE || type == EVT_BACKGROUND) { suspend_autoplay(); ClearTimer(startup_callback); splash_visible = false; persist(); }
+            else if (type == EVT_ORIENTATION) { stop_autoplay(); ClearTimer(startup_callback); splash_visible = false; SetOrientation(p1); if (library_visible) show_library(); else draw(true); }
             else if (type == EVT_POINTERUP) {
                 if (splash_visible) { finish_startup(); return 0; }
-                for (const auto& control : scene.controls) if (control.bounds.contains(p1, p2)) { act(control.action); break; }
+                for (const auto& control : scene.controls) if (control.bounds.contains(p1, p2)) {
+                    if (control.action == Action::library_command) select(control.value); else act(control.action);
+                    break;
+                }
             } else if (type == EVT_KEYPRESS || type == EVT_KEYREPEAT) {
                 if (splash_visible) { finish_startup(); return 0; }
+                if (library_visible) {
+                    if (p1 == IV_KEY_NEXT || p1 == IV_KEY_NEXT2 || p1 == IV_KEY_RIGHT) select(3);
+                    else if (p1 == IV_KEY_PREV || p1 == IV_KEY_PREV2 || p1 == IV_KEY_LEFT) select(2);
+                    else if (p1 == IV_KEY_BACK) menu_back();
+                    else if (p1 == IV_KEY_MENU || p1 == IV_KEY_OK) show_library_tools();
+                    return 0;
+                }
                 if (p1 == IV_KEY_NEXT || p1 == IV_KEY_NEXT2 || p1 == IV_KEY_RIGHT) act(full_comment ? Action::comment_next : Action::next);
                 else if (p1 == IV_KEY_PREV || p1 == IV_KEY_PREV2 || p1 == IV_KEY_LEFT) act(full_comment ? Action::comment_previous : Action::previous);
                 else if (p1 == IV_KEY_MENU || p1 == IV_KEY_OK) show_main();
                 else if (p1 == IV_KEY_BACK) { if (full_comment) act(Action::toggle_comment); else finish(true); }
             }
         } catch (const std::exception& e) { error(e.what()); }
-        if (!autoplay) ForcingSleep();
+        if (!autoplay || suspended) ForcingSleep();
         return 0;
     }
 
     void select(int index) {
         try {
-            if (!index || index == 900) { menu_back(); return; }
-            if (std::none_of(menu.begin(), menu.end(), [&](const imenu& item) { return item.type == ITEM_ACTIVE && item.index == index; })) { draw(true); return; }
+            if (!index) { draw(true); return; }
+            if (index == 900) { menu_back(); return; }
+            if (index == 901 && library_visible) { draw(true); return; }
+            if (std::none_of(menu.begin(), menu.end(), [&](const imenu& item) { return item.type == ITEM_ACTIVE && item.index == index; })) { return; }
+            if (index == 140) { open_random(); return; }
             if (action_menu()) {
                 if (index == 130) { show_game_actions(); return; }
                 if (index == 131) { show_file_actions(); return; }
@@ -91,7 +107,7 @@ public:
                 if (index == 135) { open_move_keyboard(); return; }
                 if (index == 136) { act(Action::back_ten); return; }
                 if (index == 137) { act(Action::forward_ten); return; }
-                if (index == 100) { page = 0; show_files(); return; }
+                if (index == 100) { files_from_library = mode == Menu::library_tools; page = 0; show_files(); return; }
                 if (index == 102) { page = 0; show_games(); return; }
                 if (index == 103) { page = 0; show_variants(); return; }
                 if (index == 104 && viewer) { full_comment = false; information = false; if (viewer->previous_branch()) changed(); }
@@ -104,12 +120,14 @@ public:
                 if (index == 111) { association(false); return; }
                 if (index == 112) { const int rotation[] = {1, 3, 0, 2}; SetOrientation(rotation[GetOrientation() & 3]); }
                 if (index == 113) { finish(true); return; }
-                if (index == 114) { page = 0; show_library(); return; }
+                if (index == 114) { show_library(); return; }
+                if (index == 13) { library.refresh(); show_library(); return; }
+                if (index == 14) { library_filter = LibraryFilter{}; library_page = 0; show_library(); return; }
                 if (index == 115) { toggle_autoplay(); draw(); return; }
                 if (index == 116) { show_pauses(); return; }
                 if (index == 117 && viewer) { screenshot(); return; }
                 if (index == 118) { show_logos(); return; }
-                if ((index == 120 || index == 121) && viewer) { library.set_viewed(file, index == 120); }
+                if ((index == 120 || index == 121) && viewer) { library.set_viewed(file, index == 120); show_file_actions(); return; }
                 if ((index == 122 || index == 123) && viewer) { request_file_action(index); return; }
             } else if (mode == Menu::encodings && viewer) {
                 if (index == 200) manual = "auto";
@@ -137,29 +155,28 @@ public:
                 if (index == 3) { ++page; show_games(); return; }
                 if (index >= 1000) { viewer->select_game(page * page_size + static_cast<std::size_t>(index - 1000)); manual = "auto"; resolve_encoding(); changed(); }
             } else if (mode == Menu::library) {
-                if (index == 10) { show_filters(); return; }
+                if (index >= 20 && index <= 22) {
+                    library_filter.status = index == 20 ? ReadFilter::all : index == 21 ? ReadFilter::new_only : ReadFilter::viewed_only;
+                    library_page = 0; show_library(); return;
+                }
+                if (index == 15) { show_library_tools(); return; }
                 if (index == 11) { page = 0; show_years(); return; }
                 if (index == 12) {
                     std::strncpy(search_buffer, library_filter.query.c_str(), sizeof(search_buffer) - 1);
                     search_buffer[sizeof(search_buffer) - 1] = 0;
                     OpenKeyboard("Игрок, турнир, дата или имя файла", search_buffer, sizeof(search_buffer) - 1, 0, search_callback); return;
                 }
-                if (index == 13) { library.refresh(); page = 0; show_library(); return; }
-                if (index == 14) { library_filter.query.clear(); page = 0; show_library(); return; }
-                if (index == 2) { if (page) --page; show_library(); return; }
-                if (index == 3) { ++page; show_library(); return; }
-                const auto offset = page * page_size + static_cast<std::size_t>(index - 1000);
+                if (index == 2) { if (library_page) --library_page; show_library(); return; }
+                if (index == 3) { ++library_page; show_library(); return; }
+                const auto offset = library_page * library_page_capacity(ScreenWidth(), ScreenHeight()) + static_cast<std::size_t>(index - 1000);
                 if (index >= 1000 && offset < library_rows.size()) open_file(root + '/' + library.records()[library_rows[offset]].path);
-            } else if (mode == Menu::library_filters) {
-                if (index >= 20 && index <= 22) library_filter.status = index == 20 ? ReadFilter::all : index == 21 ? ReadFilter::new_only : ReadFilter::viewed_only;
-                page = 0; show_library(); return;
             } else if (mode == Menu::library_years) {
-                if (index == 1) { library_filter.year.clear(); page = 0; show_library(); return; }
+                if (index == 1) { library_filter.year.clear(); library_page = 0; show_library(); return; }
                 if (index == 2) { if (page) --page; show_years(); return; }
                 if (index == 3) { ++page; show_years(); return; }
                 const auto offset = page * page_size + static_cast<std::size_t>(index - 1000);
                 if (index >= 1000 && offset < year_rows.size()) library_filter.year = year_rows[offset];
-                page = 0; show_library(); return;
+                library_page = 0; show_library(); return;
             } else if (mode == Menu::refresh_settings) {
                 if (index >= 500 && index < 505) { refresh_interval = refresh_intervals[index - 500]; save_preferences(); }
             } else if (mode == Menu::pauses) {
@@ -167,12 +184,13 @@ public:
             } else if (mode == Menu::logos) {
                 if (index >= 400 && index < 407) { logo_choice = index - 399; save_preferences(); splash_visible = true; show_splash(); return; }
             }
+            if (mode == Menu::encodings || mode == Menu::pauses || mode == Menu::refresh_settings || mode == Menu::settings) { show_settings(); return; }
             draw(true);
         } catch (const std::exception& e) { error(e.what()); }
     }
 
     void search(char* value) {
-        try { if (value) library_filter.query = value; page = 0; show_library(); }
+        try { if (value) { library_filter.query = value; library_page = 0; } show_library(); }
         catch (const std::exception& e) { error(e.what()); }
     }
     void move_to(char* value) {
@@ -208,7 +226,9 @@ public:
         } catch (const std::exception& e) { draw(true); error(e.what()); }
     }
     void autoplay_tick() {
-        if (!autoplay) return;
+        if (!autoplay || suspended) return;
+        // A cover/power-button lock may precede HIDE. Do not play behind it.
+        if (get_keylock() || !IsTaskActive()) { suspend_autoplay(); return; }
         try {
             if (!viewer || viewer->node().children.size() != 1) { stop_autoplay(); draw(); return; }
             if (viewer->next()) changed();
@@ -231,6 +251,8 @@ private:
     std::string file, source_id, manual = "auto", encoding_error, directory;
     EncodingChoice encoding{"UTF-8", false, ""};
     bool full_comment = false, information = false, about = false, dirty = false;
+    bool library_visible = false, files_from_library = false;
+    std::size_t library_page = 0;
     std::size_t comment_page = 0, page = 0;
     unsigned refreshes = 0;
     Menu mode = Menu::main;
@@ -247,6 +269,8 @@ private:
     int pending_file_action = 0;
     std::string pending_path, pending_source;
     bool autoplay = false;
+    bool suspended = false;
+    bool idle_blocked = false;
     bool closing = false;
     bool splash_visible = true;
     int pause_seconds = 3;
@@ -273,7 +297,7 @@ private:
         if (requested) CloseApp();
     }
     bool action_menu() const {
-        return mode == Menu::main || mode == Menu::game_actions || mode == Menu::file_actions || mode == Menu::settings || mode == Menu::associations || mode == Menu::navigation;
+        return mode == Menu::library_tools || mode == Menu::main || mode == Menu::game_actions || mode == Menu::file_actions || mode == Menu::settings || mode == Menu::associations || mode == Menu::navigation;
     }
     void open_move_keyboard() {
         if (!viewer) return;
@@ -321,7 +345,31 @@ private:
         paint(scene); FullUpdate(); refreshes = 0;
         SetHardTimer("era-sgf-startup", startup_callback, 1500);
     }
-    void stop_autoplay() { autoplay = false; ClearTimer(autoplay_callback); }
+    void block_idle(bool block) {
+        if (idle_blocked == block) return;
+        // These SDK switches control automatic lock/off timers, not manual sleep
+        // or CPU standby between hard timers. No system preferences are changed.
+        SetAutoKeylock(!block);
+        SetAutoPowerOff(!block);
+        idle_blocked = block;
+    }
+    void stop_autoplay() {
+        autoplay = false; ClearTimer(autoplay_callback); block_idle(false);
+    }
+    void suspend_autoplay() {
+        // Preserve the user's Play intent, but leave no work running in sleep.
+        suspended = true; ClearTimer(autoplay_callback); block_idle(false);
+    }
+    void resume_autoplay() {
+        if (get_keylock() || !IsTaskActive()) { suspend_autoplay(); return; }
+        suspended = false;
+        if (!autoplay) return;
+        // SHOW/FOREGROUND may arrive together or after a lost firmware timer.
+        // Re-arm once from now, never catch up moves elapsed while asleep.
+        ClearTimer(autoplay_callback);
+        block_idle(true);
+        SetHardTimer("era-sgf-autoplay", autoplay_callback, pause_seconds * 1000);
+    }
     void toggle_autoplay() {
         if (autoplay) { stop_autoplay(); return; }
         if (!viewer || full_comment || !encoding_error.empty() || viewer->node().children.size() != 1) {
@@ -329,7 +377,7 @@ private:
             if (viewer && viewer->node().children.size() > 1) Message(ICON_INFORMATION, "Era-SGF", "Развилка: сначала выбери ветку вручную.", 3000);
             return;
         }
-        autoplay = true; SetHardTimer("era-sgf-autoplay", autoplay_callback, pause_seconds * 1000);
+        autoplay = true; resume_autoplay();
     }
     void show_pauses() {
         std::vector<std::pair<int, std::string>> options;
@@ -494,6 +542,7 @@ private:
         }
     }
     void draw(bool full = false) {
+        library_visible = false;
         full = full || menu_overlay;
         menu_overlay = false;
         const int width = ScreenWidth(), height = ScreenHeight();
@@ -542,15 +591,16 @@ private:
         case Menu::main: draw(true); break;
         case Menu::navigation: case Menu::variants: case Menu::games: show_game_actions(); break;
         case Menu::refresh_settings: case Menu::encodings: case Menu::pauses: case Menu::logos: case Menu::associations: show_settings(); break;
-        case Menu::library_filters: case Menu::library_years: page = 0; show_library(); break;
-        case Menu::files: if (viewer) show_file_actions(); else show_main(); break;
+        case Menu::library_years: case Menu::library_tools: show_library(); break;
+        case Menu::file_actions: show_game_actions(); break;
+        case Menu::files: if (files_from_library) show_library(); else if (viewer) show_file_actions(); else show_main(); break;
         default: show_main(); break;
         }
     }
     void show(Menu selected, const std::string& title, std::vector<std::pair<int, std::string>> options) {
-        if (selected != Menu::main) options.insert(options.begin(), {900, "< Назад"});
+        if (selected != Menu::main) options.insert(options.begin(), {900, "←"});
         stop_autoplay();
-        menu_overlay = true;
+        menu_overlay = true; library_visible = false;
         mode = selected; labels.clear(); menu.clear(); labels.reserve(options.size() + 1); menu.reserve(options.size() + 2);
         labels.push_back(title);
         for (const auto& option : options) labels.push_back(option.second);
@@ -561,9 +611,9 @@ private:
     }
     void show_main() {
         if (about) { about = false; full_comment = false; comment_page = 0; }
-        std::vector<std::pair<int, std::string>> options{{114, "Библиотека партий"}};
+        std::vector<std::pair<int, std::string>> options{{114, "Библиотека партий"}, {140, "Случайная новая партия"}};
         if (viewer) {
-            options.insert(options.end(), {{130, "Партия…"}, {131, "Файл…"}, {117, "Снимок позиции (.png)"}});
+            options.insert(options.end(), {{130, "Текущая партия…"}, {117, "Снимок позиции (.png)"}});
         } else options.push_back({100, "Открыть SGF"});
         options.insert(options.end(), {{132, "Настройки…"}, {113, "Выход"}});
         show(Menu::main, std::string("Era-SGF ") + version, options);
@@ -575,7 +625,8 @@ private:
         options.push_back({109, full_comment ? "Вернуться к доске" : "Комментарий на весь экран"});
         if (viewer->node().children.size() == 1 || autoplay) options.push_back({115, autoplay ? "Остановить автолистание" : "Начать автолистание"});
         if (viewer->collection().games.size() > 1) options.push_back({102, "Выбрать партию в SGF…"});
-        show(Menu::game_actions, "Партия", options);
+        options.push_back({131, "Файл и отметка просмотра…"});
+        show(Menu::game_actions, "Текущая партия", options);
     }
     void show_navigation() {
         if (!viewer) return;
@@ -600,30 +651,53 @@ private:
         if (page) options.push_back({2, "< Предыдущая страница"});
         if ((page + 1) * page_size < count) options.push_back({3, "Следующая страница >"});
     }
-    std::string filter_name() const {
-        return library_filter.status == ReadFilter::new_only ? "Новые" : library_filter.status == ReadFilter::viewed_only ? "Просмотренные" : "Все";
+    void open_random() {
+        stop_autoplay();
+        library.refresh();
+        std::random_device seed;
+        std::mt19937 random(seed());
+        const auto path = library.random_unviewed(random);
+        if (path.empty()) {
+            LibraryFilter unread; unread.status = ReadFilter::new_only;
+            const auto message = library.records().empty() ? "В библиотеке пока нет партий. Добавь SGF в папку sgf и обнови список."
+                : library.query(unread).empty() ? "Все партии уже просмотрены."
+                : "Непросмотренные файлы есть, но их не удалось прочитать. Проверь SGF в библиотеке.";
+            if (library_visible) show_library(); else draw(true);
+            Message(ICON_INFORMATION, "Случайная партия", message, 4000);
+            return;
+        }
+        open_file(root + '/' + path); draw(true);
+    }
+    void show_library_tools() {
+        show(Menu::library_tools, "Библиотека", {{13, "Обновить список партий"}, {100, "Открыть SGF из папки…"}, {14, "Сбросить поиск и фильтры"}});
     }
     void show_library() {
+        stop_autoplay();
         if (!library.loaded()) library.refresh();
         library_rows = library.query(library_filter);
-        page = std::min(page, library_rows.empty() ? std::size_t{0} : (library_rows.size() - 1) / page_size);
-        std::vector<std::pair<int, std::string>> options{
-            {10, "Показывать: " + filter_name()}, {11, "Год: " + (library_filter.year.empty() ? "все" : library_filter.year == "unknown" ? "без даты" : library_filter.year)},
-            {12, library_filter.query.empty() ? "Поиск…" : "Поиск: " + library_filter.query}, {13, "Обновить библиотеку"}};
-        if (!library_filter.query.empty()) options.push_back({14, "Сбросить поиск"});
-        for (std::size_t i = page * page_size; i < std::min(library_rows.size(), (page + 1) * page_size); ++i) {
-            const auto& record = library.records()[library_rows[i]];
-            std::string title = record.viewed ? "✓ " : "○ ";
-            if (!record.date.empty()) title += record.date + " · ";
-            title += record.black.empty() && record.white.empty() ? basename(record.path) : record.black + " — " + record.white;
-            if (record.games > 1) title += " [" + std::to_string(record.games) + " партий]";
-            if (!record.problem.empty()) title += " [ошибка SGF]";
-            options.push_back({1000 + static_cast<int>(i % page_size), title});
+        const auto capacity = library_page_capacity(ScreenWidth(), ScreenHeight());
+        const auto pages = std::max<std::size_t>(1, (library_rows.size() + capacity - 1) / capacity);
+        library_page = std::min(library_page, pages - 1);
+        LibraryViewModel value; value.total = library.records().size(); value.matching = library_rows.size();
+        value.page = library_page; value.pages = pages; value.query = library_filter.query; value.year = library_filter.year;
+        value.status = library_filter.status == ReadFilter::new_only ? 1 : library_filter.status == ReadFilter::viewed_only ? 2 : 0;
+        for (std::size_t i = library_page * capacity; i < std::min(library_rows.size(), (library_page + 1) * capacity); ++i) {
+            const auto& r = library.records()[library_rows[i]];
+            const auto title = r.black.empty() && r.white.empty() ? basename(r.path)
+                : (r.black.empty() ? "Чёрные: ?" : r.black) + " — " + (r.white.empty() ? "Белые: ?" : r.white);
+            std::string detail = r.date.empty() ? "Без даты" : r.date;
+            detail += r.viewed ? " · Просмотрена" : " · Новая";
+            if (!r.problem.empty()) detail += " · Ошибка SGF";
+            else if (!r.event.empty()) detail += " · " + r.event;
+            if (r.games > 1) detail += " · В файле: " + std::to_string(r.games);
+            value.rows.push_back({title, detail});
         }
-        pagers(options, library_rows.size());
-        show(Menu::library, "Библиотека: " + std::to_string(library_rows.size()) + " / " + std::to_string(library.records().size()), options);
+        scene = make_library_scene(value, ScreenWidth(), ScreenHeight());
+        mode = Menu::library; library_visible = true; menu_overlay = false;
+        menu.clear();
+        for (const auto& c : scene.controls) menu.push_back({ITEM_ACTIVE, static_cast<short>(c.value), nullptr, nullptr});
+        paint(scene); FullUpdate(); refreshes = 0;
     }
-    void show_filters() { show(Menu::library_filters, "Какие партии показывать", {{20, "Все"}, {21, "Новые"}, {22, "Просмотренные"}}); }
     void show_years() {
         year_rows = library.years();
         page = std::min(page, year_rows.empty() ? std::size_t{0} : (year_rows.size() - 1) / page_size);

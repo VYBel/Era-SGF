@@ -23,6 +23,29 @@ void test(const char* name, const std::function<void()>& f) {
 }
 
 int main() {
+    test("library layout has reachable nonoverlapping controls in both orientations", [] {
+        for (const auto dimensions : {std::pair<int, int>{320,320}, {600,800}, {1264,1680}, {1680,1264}}) {
+            LibraryViewModel model; model.total = model.matching = 1700; model.pages = 200; model.page = 1;
+            const auto count = library_page_capacity(dimensions.first, dimensions.second);
+            CHECK(count >= 1);
+            for (std::size_t i = 0; i < count; ++i) model.rows.push_back({"Black player — White player", "1969-11-14 · New"});
+            const auto scene = make_library_scene(model, dimensions.first, dimensions.second);
+            std::size_t rows = 0;
+            for (std::size_t i = 0; i < scene.controls.size(); ++i) {
+                const auto& c = scene.controls[i];
+                if (c.value >= 1000) ++rows;
+                CHECK(c.bounds.w > 0 && c.bounds.h >= 40);
+                CHECK(c.bounds.x >= 0 && c.bounds.y >= 0);
+                CHECK(c.bounds.x + c.bounds.w <= dimensions.first);
+                CHECK(c.bounds.y + c.bounds.h <= dimensions.second);
+                for (std::size_t j = i + 1; j < scene.controls.size(); ++j) {
+                    const auto& d = scene.controls[j].bounds;
+                    CHECK(c.bounds.x + c.bounds.w <= d.x || d.x + d.w <= c.bounds.x || c.bounds.y + c.bounds.h <= d.y || d.y + d.h <= c.bounds.y);
+                }
+            }
+            CHECK(rows == count);
+        }
+    });
     test("escaped brackets, slashes and soft newlines stay inside comments", [] {
         auto c = parse_sgf("(;SZ[9]C[hello\\] \\\\ path\\\nnext];B[aa])");
         CHECK(c.games.size() == 1);

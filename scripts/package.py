@@ -53,7 +53,7 @@ alone does not. Menu actions can mark it new/viewed, move it to sgf/viewed/<year
 the selected file after confirmation. A move preserves the saved position and never replaces
 an existing file. Source SGFs are never rewritten to change comments or encoding.
 Положи партии в sgf/, при желании — в подпапки по годам. В «Библиотеке партий» доступны
-все/новые/просмотренные, год и поиск. После копирования файлов нажми «Обновить библиотеку».
+все/новые/просмотренные, год и поиск. После копирования файлов нажми «⋯ → Обновить список партий».
 Перенос и удаление текущего файла доступны в меню и требуют подтверждения.
 
 Keys / Управление:
@@ -65,7 +65,11 @@ In the full comment view, page-turn keys change comment pages; Back returns to t
 Below the board: beginning, -10 moves, clickable move number, +10 moves and end.
 Под доской: начало, −10 ходов, номер хода (нажми для ввода), +10 и конец.
 Main menu: Library, Game, File, Screenshot, Settings and Exit.
-Основное меню: «Библиотека», «Партия», «Файл», «Снимок позиции», «Настройки», «Выход».
+Основное меню: «Библиотека», «Случайная новая партия», «Текущая партия», «Снимок позиции», «Настройки», «Выход».
+Файловые операции доступны в «Текущая партия → Файл и отметка просмотра».
+В библиотеке фильтры и поиск находятся над списком; ⋯ — обновление, открытие файла и сброс фильтров.
+← возвращает на уровень выше, закрытие меню возвращает к доске.
+Случайная новая выбирается среди непросмотренных файлов всей библиотеки.
 Screen refresh / Очистка экрана:
 Settings → Screen refresh: every 5/10/20/50 changes or manual; default 10.
 The circular-arrow button at the top right forces a full refresh and resets the count.

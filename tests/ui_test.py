@@ -42,7 +42,7 @@ class DeviceAdapter(unittest.TestCase):
         vector = subprocess.run([PREVIEW, str(self.record)], capture_output=True, text=True, check=True)
         circles = ET.fromstring(vector.stdout).findall('{http://www.w3.org/2000/svg}circle')
         white = next(c for c in circles if c.attrib.get('fill') == 'rgb(255,255,255)' and int(c.attrib['r']) > 10)
-        black = next(c for c in circles if c.attrib.get('fill') == 'rgb(0,0,0)' and int(c.attrib['r']) > 10)
+        black = max((c for c in circles if c.attrib.get('fill') == 'rgb(0,0,0)'), key=lambda c: int(c.attrib['r']))
         header, size, maximum, data = (self.root / 'frame.pgm').read_bytes().split(b'\n', 3)
         self.assertEqual((header, maximum), (b'P5', b'255'))
         width, height = map(int, size.split())
@@ -62,14 +62,16 @@ class DeviceAdapter(unittest.TestCase):
         self.assertNotIn('UTF-8', trace)
         self.assertNotIn('Ветки 1', trace)
 
-    def test_submenus_return_one_level_with_back_item_or_cancel(self):
-        for back in ('select:0', 'select:900'):
+    def test_submenus_return_one_level_with_arrow_and_close_to_board(self):
+        for back in ('select:900',):
             trace = self.run_ui(f'menu;select:132;select:116;{back}', self.record)
             self.assertIn('0:Настройки', trace.rsplit('MENU\n', 1)[-1])
             trace = self.run_ui(f'menu;select:130;select:134;{back};{back}', self.record)
             final = trace.rsplit('MENU\n', 1)[-1]
-            self.assertIn('130:Партия', final)
+            self.assertIn('130:Текущая партия', final)
             self.assertNotIn('900:', final)
+        trace = self.run_ui('menu;select:132;select:116;select:0;close', self.record)
+        self.assertIn('Ход', self.last_frame(trace))
 
     def test_refresh_interval_counts_changes_and_manual_button_resets_it(self):
         self.navigation_fixture()
@@ -115,30 +117,30 @@ class DeviceAdapter(unittest.TestCase):
         first.write_text('(;SZ[9]CA[UTF-8]PB[Go Seigen]PW[Cho Chikun]DT[1969-11-14];B[aa]C[Target game])')
         (self.root / 'sgf/2001').mkdir()
         (self.root / 'sgf/2001/second.sgf').write_text('(;SZ[9]PB[Other]PW[Players]DT[2001-01-01])')
-        trace = self.run_ui('menu;select:114;select:12;text:seigen;select:1000;next;close')
+        trace = self.run_ui('menu;select:114;tap-text:Поиск;text:seigen;tap-text:Go Seigen;next;close')
         self.assertIn('Target game', trace)
-        trace = self.run_ui('menu;select:114;select:10;select:22;close')
-        final_menu = trace.rsplit('MENU\n', 1)[-1]
+        trace = self.run_ui('menu;select:114;tap-text:Просмотренные;close')
+        final_menu = trace.split('FRAME\n')[-2].split('END_')[0]
         self.assertIn('Seigen', final_menu)
         self.assertNotIn('Other', final_menu)
-        trace = self.run_ui('menu;select:114;select:11;select:1001;close')
-        self.assertIn('1969', trace.rsplit('MENU\n', 1)[-1])
-        self.assertNotIn('2001-01-01', trace.rsplit('MENU\n', 1)[-1])
+        trace = self.run_ui('menu;select:114;tap-text:Год;select:1001;close')
+        self.assertIn('1969', trace.split('FRAME\n')[-2].split('END_')[0])
+        self.assertNotIn('2001-01-01', trace.split('FRAME\n')[-2].split('END_')[0])
 
     def test_delete_requires_confirmation_and_moves_preserve_resume_and_bytes(self):
         (self.root / 'sgf/1969').mkdir(parents=True)
         game = self.root / 'sgf/1969/game.sgf'
         game.write_text('(;SZ[9]CA[UTF-8]DT[1969];B[aa];W[bb])')
         before = game.read_bytes()
-        self.run_ui('next;menu;select:131;select:123;confirm:2;close', game)
+        self.run_ui('next;menu;select:130;select:131;select:123;confirm:2;close', game)
         self.assertEqual(game.read_bytes(), before)
-        self.run_ui('menu;select:131;select:122;confirm:1;close', game)
+        self.run_ui('menu;select:130;select:131;select:122;confirm:1;close', game)
         moved = self.root / 'sgf/viewed/1969/game.sgf'
         self.assertFalse(game.exists())
         self.assertEqual(moved.read_bytes(), before)
         result = subprocess.run([INSPECT, str(moved), '--state-dir', str(self.root / 'system/config/era-sgf')], capture_output=True, text=True, check=True)
         self.assertEqual(json.loads(result.stdout)['node'], 1)
-        self.run_ui('menu;select:131;select:123;confirm:1;close', moved)
+        self.run_ui('menu;select:130;select:131;select:123;confirm:1;close', moved)
         self.assertFalse(moved.exists())
 
     def saved_node(self, record=None):
@@ -180,6 +182,81 @@ class DeviceAdapter(unittest.TestCase):
         self.assertEqual(trace.splitlines().count('FRAME'), 2)  # splash, then one static board
         self.assertIn('TIMERS_ACTIVE 0', trace)
 
+    def test_autoplay_disables_system_idle_actions_only_while_running(self):
+        self.record.write_text('(;SZ[19];B[aa];W[bb];B[cc])')
+        trace = self.run_ui('policy;menu;select:130;select:115;wait:6000;policy;menu;policy;close', self.record)
+        policies = [line for line in trace.splitlines() if line.startswith('POWER_POLICY ')]
+        self.assertEqual(policies, ['POWER_POLICY 1 1 TIMERS 0', 'POWER_POLICY 0 0 TIMERS 1', 'POWER_POLICY 1 1 TIMERS 0'])
+        self.assertIn('POWER_POLICY_EXIT 1 1', trace)
+        self.assertEqual(self.saved_node(), 2)
+
+    def test_autoplay_restores_idle_policy_at_branch_end_error_and_exit(self):
+        for record in ('(;SZ[19];B[aa](;W[bb])(;W[cc]))', '(;SZ[19];B[aa])', '(;SZ[19];B[zz])'):
+            with self.subTest(record=record):
+                self.record.write_text(record)
+                trace = self.run_ui('menu;select:130;select:115;wait:3000;policy;close', self.record)
+                self.assertIn('POWER_POLICY 1 1 TIMERS 0', trace)
+                self.assertIn('POWER_POLICY_EXIT 1 1', trace)
+        self.record.write_text('(;SZ[19];B[aa];W[bb])')
+        trace = self.run_ui('menu;select:130;select:115;policy;close', self.record)
+        self.assertIn('POWER_POLICY 0 0 TIMERS 1', trace)
+        self.assertIn('POWER_POLICY_EXIT 1 1', trace)
+
+    def test_autoplay_resumes_after_hide_or_background_without_skipping_moves(self):
+        self.record.write_text('(;SZ[19];B[aa];W[bb];B[cc];W[dd])')
+        for leave in ('hide', 'background', 'hide;background'):
+            for wake in ('show', 'foreground', 'foreground;show', 'show;foreground'):
+                with self.subTest(leave=leave, wake=wake):
+                    trace = self.run_ui('menu;select:130;select:134;select:105;menu;select:130;select:115;wait:3000;'
+                                        + leave + ';policy;wait:60000;drop-timers;' + wake + ';policy;wait:2999;hide;close', self.record)
+                    self.assertIn('POWER_POLICY 1 1 TIMERS 0', trace)
+                    self.assertIn('POWER_POLICY 0 0 TIMERS 1', trace)
+                    self.assertEqual(self.saved_node(), 1, 'sleep must not advance or catch up moves')
+                    trace = self.run_ui('menu;select:130;select:115;' + leave + ';wait:60000;' + wake + ';wait:3000;close', self.record)
+                    self.assertEqual(self.saved_node(), 2, 'resume must advance once without a button press')
+
+    def test_show_recovers_lost_autoplay_timer_and_stop_needs_one_tap(self):
+        self.record.write_text('(;SZ[19];B[aa];W[bb];B[cc];W[dd])')
+        trace = self.run_ui('menu;select:130;select:115;wait:3000;drop-timers;show;foreground;wait:3000;'
+                            'tap:875,1600;wait:30000;policy;close', self.record)
+        self.assertEqual(self.saved_node(), 2)
+        self.assertIn('POWER_POLICY 1 1 TIMERS 0', trace)
+
+    def test_autoplay_does_not_advance_if_locked_before_hide(self):
+        self.record.write_text('(;SZ[19];B[aa];W[bb];B[cc])')
+        trace = self.run_ui('menu;select:130;select:115;lock;wait:30000;policy;show;wait:3000;close', self.record)
+        self.assertEqual(self.saved_node(), 1)
+        self.assertIn('POWER_POLICY 1 1 TIMERS 0', trace)
+
+    def test_stopped_autoplay_stays_stopped_after_wake(self):
+        self.record.write_text('(;SZ[19];B[aa];W[bb];B[cc])')
+        trace = self.run_ui('menu;select:130;select:115;tap:875,1600;hide;background;show;foreground;wait:30000;policy;close', self.record)
+        self.assertEqual(self.saved_node(), 0)
+        self.assertIn('POWER_POLICY 1 1 TIMERS 0', trace)
+
+    def test_hoshi_are_visible_beyond_grid_lines_in_native_framebuffer(self):
+        for size in (9, 13, 19):
+            with self.subTest(size=size):
+                self.record.write_text(f'(;SZ[{size}])')
+                self.run_ui('close', self.record)
+                vector = subprocess.run([PREVIEW, str(self.record)], capture_output=True, text=True, check=True)
+                tree = ET.fromstring(vector.stdout)
+                points = [c for c in tree.findall('{http://www.w3.org/2000/svg}circle') if c.attrib.get('fill') == 'rgb(0,0,0)']
+                self.assertEqual(len(points), 9)
+                _, dims, _, data = (self.root / 'frame.pgm').read_bytes().split(b'\n', 3)
+                width, _ = map(int, dims.split())
+                for point in points:
+                    x, y, r = (int(point.attrib[k]) for k in ('cx', 'cy', 'r'))
+                    self.assertGreaterEqual(r, 6, 'star points must stand out from the 3px Era grid')
+                    self.assertEqual(data[(y + 3) * width + x + 3], 0)
+
+    def test_autoplay_resume_keeps_selected_pause_through_repeated_sleep(self):
+        self.record.write_text('(;SZ[19];B[aa];W[bb];B[cc])')
+        trace = self.run_ui('menu;select:132;select:116;select:307;menu;select:130;select:115;'
+                            'hide;wait:120000;show;wait:59999;hide;wait:120000;foreground;wait:60000;close', self.record)
+        self.assertEqual(self.saved_node(), 1)
+        self.assertIn('POWER_POLICY_EXIT 1 1', trace)
+
     def test_screenshots_save_real_board_pixels_unique_names_and_keep_the_position(self):
         self.record.write_text('(;SZ[9]CA[UTF-8]PB[Black]PW[White]AB[bb]AW[cc]C[Position note])')
         trace = self.run_ui('menu;select:117;menu;select:130;select:109;menu;select:117;close', self.record)
@@ -214,7 +291,7 @@ class DeviceAdapter(unittest.TestCase):
 
     def test_launch_shows_version_then_dismisses_once_without_idle_timers(self):
         trace = self.run_ui('wait:1500;wait:60000;close', self.record, wait_startup=False)
-        self.assertIn('Версия 1.0.1', trace)
+        self.assertIn('Версия 1.1.0', trace)
         self.assertEqual(trace.splitlines().count('FRAME'), 2)
         self.assertIn('TIMERS_ACTIVE 0', trace)
         trace = self.run_ui('hide;wait:60000;close', self.record, wait_startup=False)
@@ -239,7 +316,7 @@ class DeviceAdapter(unittest.TestCase):
             with self.subTest(action=action):
                 self.record.write_text('(;SZ[9]PB[Original];B[aa])')
                 with patch.dict(os.environ, ERA_SGF_TEST_REPLACE_FILE=str(self.record), ERA_SGF_TEST_REPLACE_BYTES=replacement):
-                    trace = self.run_ui(f'replace;menu;select:114;select:13;select:0;menu;select:131;select:{action};confirm:1;close', self.record)
+                    trace = self.run_ui(f'replace;menu;select:114;menu;select:13;back;menu;select:130;select:131;select:{action};confirm:1;close', self.record)
                 self.assertTrue(self.record.exists())
                 self.assertEqual(self.record.read_text(), replacement)
                 self.assertIn('Файл изменён', trace)
@@ -322,6 +399,66 @@ class DeviceAdapter(unittest.TestCase):
         self.assertIn('107:Кодировка', settings)
         self.assertIn('118:Логотип', settings)
 
+    def test_random_opens_only_unviewed_game_without_marking_it_viewed(self):
+        (self.root / 'sgf').mkdir()
+        new = self.root / 'sgf/new.sgf'
+        new.write_text('(;SZ[19]PB[Random target]PW[Opponent];B[aa])')
+        trace = self.run_ui('menu;select:130;select:131;select:120;menu;select:140;close', self.record)
+        self.assertIn('B: Random target - W: Opponent', trace)
+        trace = self.run_ui('menu;select:114;tap-text:Новые;close')
+        self.assertIn('Random target', self.last_frame(trace))
+        self.assertIn('Найдено: 1 из 2', self.last_frame(trace))
+
+    def test_random_distinguishes_empty_all_viewed_and_unreadable(self):
+        trace = self.run_ui('menu;select:140;close')
+        self.assertIn('В библиотеке пока нет партий', trace)
+        trace = self.run_ui('next;next;menu;select:130;select:131;select:120;menu;select:140;close', self.record)
+        self.assertIn('Все партии уже просмотрены', trace)
+        self.assertEqual(self.saved_node(), 2)
+        (self.root / 'sgf').mkdir()
+        (self.root / 'sgf/broken.sgf').write_text('(;SZ[19]AB[zz])')
+        trace = self.run_ui('menu;select:140;close', self.record)
+        self.assertIn('не удалось прочитать', trace)
+        self.assertNotIn('Все партии уже просмотрены', trace)
+
+    @staticmethod
+    def last_frame(trace):
+        return trace.split('FRAME\n')[-2].split('END_')[0]
+
+    def test_library_is_fullscreen_with_direct_filters_and_random_ignores_them(self):
+        (self.root / 'sgf').mkdir()
+        (self.root / 'sgf/new.sgf').write_text('(;SZ[19]PB[Only new]PW[Other]DT[2000];B[aa])')
+        trace = self.run_ui('menu;select:130;select:131;select:120;menu;select:114;tap-text:Просмотренные;'
+                            'tap-text:Поиск;text:нет такой партии;tap-text:Случайная новая;close', self.record)
+        self.assertIn('B: Only new - W: Other', self.last_frame(trace))
+        self.assertIn('По этим условиям партий нет', trace)
+
+    def test_library_paging_back_close_rotation_and_wake_preserve_context(self):
+        (self.root / 'sgf').mkdir()
+        for i in range(20):
+            (self.root / f'sgf/{i:02}.sgf').write_text(f'(;SZ[19]PB[Player {i:02}]PW[Opponent]DT[2000])')
+        trace = self.run_ui('menu;select:114;next;tap-text:Год;select:900;hide;show;close')
+        frame = self.last_frame(trace)
+        self.assertIn('2 / 3', frame)
+        self.assertIn('Player 08', frame)
+        self.assertNotIn('Player 00', frame)
+        trace = self.run_ui('menu;select:114;rotate;next;close')
+        self.assertIn('Библиотека', self.last_frame(trace))
+        trace = self.run_ui('menu;select:114;tap:70,60;close')
+        self.assertIn('140:Случайная новая партия', trace.rsplit('MENU\n',1)[-1])
+        trace = self.run_ui('menu;select:114;tap:1200,60;close', self.record)
+        self.assertNotIn('Библиотека', self.last_frame(trace))
+        self.assertIn('Ход', self.last_frame(trace))
+        self.assertIn('TIMERS_ACTIVE 0', trace)
+
+    def test_library_tools_reset_filters_and_settings_stay_at_the_parent(self):
+        trace = self.run_ui('menu;select:114;tap-text:Поиск;text:missing;menu;select:14;close', self.record)
+        self.assertIn('Найдено: 1 из 1', self.last_frame(trace))
+        for submenu, choice in ((116,301),(138,502),(107,200)):
+            trace = self.run_ui(f'menu;select:132;select:{submenu};select:{choice};close', self.record)
+            self.assertIn('0:Настройки', trace.rsplit('MENU\n',1)[-1])
+            self.assertIn('900:←', trace.rsplit('MENU\n',1)[-1])
+
     def test_navigation_row_jumps_ten_moves_seeks_a_number_and_reaches_both_ends(self):
         self.navigation_fixture()
         self.run_ui(self.tap_label('10>') + ';close', self.record)
@@ -357,13 +494,13 @@ class DeviceAdapter(unittest.TestCase):
     def test_bad_ca_can_be_fixed_in_the_device_encoding_menu(self):
         self.record.write_bytes('(;SZ[9]CA[UTF-8]C[Привет, ёж!])'.encode('cp1251'))
         before = self.record.read_bytes()
-        trace = self.run_ui('menu;select:132;select:107;select:202;close', self.record)
+        trace = self.run_ui('menu;select:132;select:107;select:202;select:0;close', self.record)
         self.assertIn('Привет, ёж!', trace)
         self.assertEqual(self.record.read_bytes(), before)
 
     def test_node_name_only_encoding_error_keeps_a_touch_menu_and_can_be_fixed(self):
         self.record.write_bytes('(;SZ[9]CA[UTF-8]N[Привет, ёж!])'.encode('cp1251'))
-        trace = self.run_ui('tap:1100,1600;select:132;select:107;select:202;close', self.record)
+        trace = self.run_ui('tap:1100,1600;select:132;select:107;select:202;select:0;close', self.record)
         self.assertIn('FRAME\n', trace)
         self.assertIn('Привет, ёж!', trace)
 
@@ -372,7 +509,7 @@ class DeviceAdapter(unittest.TestCase):
         self.record.write_bytes(prefix.encode() + 'Привет, ёж!'.encode('cp1251') + b'])')
         self.run_ui('next;close', self.record)
         # Resume on the bad node: no previous frame is available to mask the failure.
-        trace = self.run_ui('tap:1100,1600;select:132;select:107;select:202;close', self.record)
+        trace = self.run_ui('tap:1100,1600;select:132;select:107;select:202;select:0;close', self.record)
         self.assertIn('Привет, ёж!', trace)
 
     def test_automatic_detection_includes_node_names(self):
@@ -381,7 +518,7 @@ class DeviceAdapter(unittest.TestCase):
         self.assertIn('Привет, ёж!', trace)
 
     def test_reopening_current_record_preserves_fresh_position(self):
-        trace = self.run_ui('next;next;menu;select:131;select:100;select:1002;close', self.record)
+        trace = self.run_ui('next;next;menu;select:130;select:131;select:100;select:1002;close', self.record)
         result = subprocess.run([INSPECT, str(self.record), '--state-dir', str(self.root / 'system/config/era-sgf')], capture_output=True, text=True)
         self.assertEqual(json.loads(result.stdout)['node'], 2)
 

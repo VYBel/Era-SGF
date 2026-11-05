@@ -40,6 +40,21 @@ struct Fixture {
 };
 }
 int main() {
+    test("random selection excludes viewed and invalid records and preserves status", [] {
+        Fixture f; Library library(f.root, f.state); library.refresh();
+        std::mt19937 random(1234);
+        library.set_viewed("sgf/1969/first.sgf", true);
+        f.write("sgf/broken.sgf", "not an SGF");
+        f.write("sgf/invalid-position.sgf", "(;SZ[19]AB[zz])"); library.refresh();
+        for (int i = 0; i < 32; ++i) CHECK(library.random_unviewed(random) == "sgf/2001/second.sgf");
+        CHECK(!library.find("sgf/2001/second.sgf")->viewed);
+        library.set_viewed("sgf/2001/second.sgf", true);
+        CHECK(library.random_unviewed(random).empty());
+        library.set_viewed("sgf/1969/first.sgf", false);
+        CHECK(library.random_unviewed(random) == "sgf/1969/first.sgf");
+        ::unlink((f.root + "/sgf/1969/first.sgf").c_str()); library.refresh();
+        CHECK(library.random_unviewed(random).empty());
+    });
     test("recursive catalogue decodes metadata and combines year status and text filters", [] {
         Fixture f; f.write("sgf/1970/русская.sgf", "(;SZ[9]CA[windows-1251]PB[\xcf\xe5\xf2\xf0]PW[Cho]DT[1970-01-01])");
         Library library(f.root, f.state); CHECK(!library.loaded()); library.refresh();

@@ -18,11 +18,14 @@
 
 namespace {
 bool closed = false;
+bool auto_keylock = true, auto_poweroff = true, active = true, locked = false;
 int orientation = 0;
 iv_menuhandler selection = nullptr;
 iv_dialoghandler confirmation = nullptr;
 iv_keyboardhandler keyboard = nullptr;
 std::vector<std::string> frame;
+struct TextHit { int x, y, w, h; std::string text; };
+std::vector<TextHit> text_hits;
 std::vector<unsigned char> pixels;
 struct Timer { iv_timerproc callback; long long deadline; };
 std::map<std::string, Timer> timers;
@@ -71,9 +74,22 @@ void InkViewMain(iv_handler handler) {
         }
         else if (event == "cancel-text" && keyboard) { auto callback = keyboard; keyboard = nullptr; callback(nullptr); }
         else if (event.rfind("tap:", 0) == 0) { const auto comma = event.find(','); handler(EVT_POINTERUP, std::stoi(event.substr(4, comma - 4)), std::stoi(event.substr(comma + 1))); }
-        else if (event == "hide") handler(EVT_HIDE, 0, 0);
-        else if (event == "background") handler(EVT_BACKGROUND, 0, 0);
-        else if (event == "show") handler(EVT_SHOW, 0, 0);
+        else if (event.rfind("tap-text:", 0) == 0) {
+            const auto label = event.substr(9); bool found = false;
+            for (const auto& item : text_hits) if (item.text.compare(0, label.size(), label) == 0) {
+                const int x = item.x + item.w / 2, y = item.y + item.h / 2;
+                handler(EVT_POINTERUP, x, y); found = true; break;
+            }
+            if (!found) throw std::runtime_error("No rendered text to tap: " + label);
+        }
+        else if (event == "hide") { active = false; handler(EVT_HIDE, 0, 0); }
+        else if (event == "background") { active = false; handler(EVT_BACKGROUND, 0, 0); }
+        else if (event == "show") { active = true; locked = false; handler(EVT_SHOW, 0, 0); }
+        else if (event == "foreground") { active = true; locked = false; handler(EVT_FOREGROUND, 0, 0); }
+        // Firmware may lose an armed timer across sleep, or lock before HIDE arrives.
+        else if (event == "drop-timers") timers.clear();
+        else if (event == "lock") locked = true;
+        else if (event == "policy") std::cout << "POWER_POLICY " << auto_keylock << ' ' << auto_poweroff << " TIMERS " << timers.size() << '\n';
         else if (event.rfind("wait:", 0) == 0) advance(std::stoll(event.substr(5)));
         else if (event == "replace") {
             const auto* path = std::getenv("ERA_SGF_TEST_REPLACE_FILE");
@@ -87,6 +103,7 @@ void InkViewMain(iv_handler handler) {
     }
     handler(EVT_EXIT, 0, 0);
     std::cout << "TIMERS_ACTIVE " << timers.size() << '\n';
+    std::cout << "POWER_POLICY_EXIT " << auto_keylock << ' ' << auto_poweroff << '\n';
 }
 void CloseApp() { closed = true; std::cout << "APP_CLOSED\n"; }
 void SetPanelType(int) {}
@@ -94,7 +111,7 @@ int ScreenWidth() { return orientation == 1 ? 1680 : 1264; }
 int ScreenHeight() { return orientation == 1 ? 1264 : 1680; }
 int GetOrientation() { return orientation; }
 void SetOrientation(int value) { orientation = value; }
-void ClearScreen() { frame.clear(); pixels.assign(static_cast<std::size_t>(ScreenWidth()) * ScreenHeight(), 255); }
+void ClearScreen() { frame.clear(); text_hits.clear(); pixels.assign(static_cast<std::size_t>(ScreenWidth()) * ScreenHeight(), 255); }
 void DrawLine(int x, int y, int x2, int y2, int color) {
     const int dx = std::abs(x2 - x), dy = -std::abs(y2 - y), sx = x < x2 ? 1 : -1, sy = y < y2 ? 1 : -1;
     int error = dx + dy;
@@ -122,13 +139,14 @@ void DrawCircle(int x, int y, int radius, int color) {
 ifont* OpenFont(const char*, int size, int) { return new ifont{size}; }
 void CloseFont(ifont* font) { delete font; }
 void SetFont(const ifont*, int) {}
-char* DrawTextRect(int, int, int, int, const char* text, int) { frame.emplace_back(text); return nullptr; }
+char* DrawTextRect(int x, int y, int w, int h, const char* text, int) { frame.emplace_back(text); text_hits.push_back({x,y,w,h,text}); return nullptr; }
 void FullUpdate() { std::cout << "UPDATE_FULL\n"; emit(); }
 void PartialUpdate(int, int, int, int) { std::cout << "UPDATE_PARTIAL\n"; emit(); }
 void OpenMenu(imenu* menu, int, int, int, iv_menuhandler callback) {
     selection = callback; std::cout << "MENU\n";
     for (auto p = menu; p && p->type; ++p) std::cout << p->index << ':' << p->text << '\n';
 }
+
 void Message(int, const char* title, const char* text, int) { std::cout << "MESSAGE " << title << ": " << text << '\n'; }
 void Dialog(int, const char* title, const char* text, const char* yes, const char* no, iv_dialoghandler callback) {
     confirmation = callback; std::cout << "DIALOG " << title << ':' << text << ':' << yes << ':' << no << '\n';
@@ -145,6 +163,10 @@ void ClearTimer(iv_timerproc callback) {
     }
 }
 void ForcingSleep() {}
+void SetAutoKeylock(bool enabled) { auto_keylock = enabled; }
+void SetAutoPowerOff(bool enabled) { auto_poweroff = enabled; }
+int IsTaskActive() { return active; }
+int get_keylock() { return locked; }
 ibitmap* BitmapFromScreen(int x, int y, int width, int height) {
     auto* bitmap = static_cast<ibitmap*>(std::malloc(sizeof(ibitmap) + static_cast<std::size_t>(width) * height));
     if (!bitmap) return nullptr;

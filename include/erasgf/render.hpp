@@ -18,8 +18,8 @@ struct DrawOp {
     bool centered = false;
     int stroke_width = 1;
 };
-enum class Action { information, refresh, previous, next, variations, menu, comment_previous, comment_next, toggle_comment, autoplay, first, back_ten, go_to_move, forward_ten, last };
-struct Control { Rect bounds; Action action; };
+enum class Action { information, refresh, previous, next, variations, menu, comment_previous, comment_next, toggle_comment, autoplay, first, back_ten, go_to_move, forward_ten, last, library_command };
+struct Control { Rect bounds; Action action; int value = 0; };
 struct BranchHint { Optional<Point> point; std::string label; };
 struct ViewModel {
     Position position;
@@ -46,6 +46,15 @@ struct Scene {
     std::size_t comment_page = 0;
 };
 Scene make_scene(const ViewModel& model, int width, int height);
+struct LibraryViewRow { std::string title, detail; };
+struct LibraryViewModel {
+    std::vector<LibraryViewRow> rows;
+    std::string query, year;
+    std::size_t total = 0, matching = 0, page = 0, pages = 1;
+    int status = 0;
+};
+std::size_t library_page_capacity(int width, int height);
+Scene make_library_scene(const LibraryViewModel& model, int width, int height);
 std::vector<std::string> wrap_text(const std::string& text, std::size_t columns);
 std::string svg(const Scene& scene, int width, int height);
 } // namespace erasgf

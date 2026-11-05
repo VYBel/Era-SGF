@@ -2,6 +2,7 @@
 #include "erasgf/storage.hpp"
 #include "erasgf/encoding.hpp"
 #include "erasgf/sgf.hpp"
+#include "erasgf/viewer.hpp"
 #include <algorithm>
 #include <cerrno>
 #include <cstring>
@@ -141,6 +142,9 @@ LibraryRecord Library::describe(const std::string& path, const std::string& raw)
     try {
         const auto collection = parse_sgf(raw); record.games = collection.games.size();
         const auto& game = collection.games[0]; const auto& node = game.nodes[0];
+        // A syntactically valid SGF may still have an unsupported board/game or
+        // invalid setup coordinates. Random candidates must open at their root.
+        replay(game, 0);
         auto decode = [&](const std::string& key) {
             const auto value = node.value(key); if (value.empty()) return value;
             std::string result;
@@ -239,6 +243,14 @@ std::vector<std::string> Library::years() const {
     std::set<std::string, std::greater<std::string>> unique;
     for (const auto& record : records_) unique.insert(record.year);
     return {unique.begin(), unique.end()};
+}
+std::string Library::random_unviewed(std::mt19937& random) const {
+    std::vector<std::size_t> candidates;
+    for (std::size_t i = 0; i < records_.size(); ++i)
+        if (!records_[i].viewed && records_[i].problem.empty()) candidates.push_back(i);
+    if (candidates.empty()) return {};
+    const auto selected = std::uniform_int_distribution<std::size_t>(0, candidates.size() - 1)(random);
+    return records_[candidates[selected]].path;
 }
 std::string Library::verified(std::size_t i) const {
     const auto& r = records_.at(i); check_file(r.path);

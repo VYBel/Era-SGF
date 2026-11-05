@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 #include <cstddef>
+#include <random>
 
 namespace erasgf {
 enum class ReadFilter { all, new_only, viewed_only };
@@ -24,6 +25,7 @@ public:
     const LibraryRecord* find(const std::string& path) const;
     std::vector<std::size_t> query(const LibraryFilter& filter) const;
     std::vector<std::string> years() const;
+    std::string random_unviewed(std::mt19937& random) const;
     void refresh();
     void track(const std::string& path, const std::string& raw);
     void set_viewed(const std::string& path, bool value);

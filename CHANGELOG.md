@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.1.0 — 2026-11-05
+
+- Full-screen library with direct All/New/Viewed tabs, search, year selection,
+  readable two-line rows, adaptive pagination and physical page-button support.
+- Random unread game from the complete refreshed library; separate messages for
+  empty, fully viewed and unreadable collections. Opening alone does not mark viewed.
+- Shorter main menu, file actions under Current game, back arrows and distinct close behavior. Settings return to their parent menu.
+- Includes the locally tested 1.0.2 fixes below.
+
+## 1.0.2 — Local build, 2026-11-05
+
+- Disable automatic keylock and power-off only while autoplay runs in the foreground;
+  restore the normal idle policy on Stop, menus, branches, game end, errors and exit.
+- Pause autoplay while hidden/locked and re-arm its timer on SHOW/FOREGROUND.
+  Resume after a full selected pause, without advancing moves while asleep or
+  requiring two button presses when the firmware drops a timer.
+- Enlarge hoshi in proportion to grid spacing and line thickness so they remain
+  visible on the high-resolution Era display.
+
 ## 1.0.1 — 2026-11-02
 
 First public release, incorporating the features developed through 0.6.0.

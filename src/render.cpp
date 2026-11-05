@@ -149,15 +149,17 @@ Scene make_scene(const ViewModel& model, int width, int height) {
         const double step = static_cast<double>(grid) / (n - 1);
         auto x = [&](int col) { return board.x + pad + static_cast<int>(std::lround(col * step)); };
         auto y = [&](int row) { return board.y + pad + static_cast<int>(std::lround(row * step)); };
+        const int grid_stroke = std::max(2, small / 420);
         for (int i = 0; i < n; ++i) {
-            const int grid_stroke = std::max(2, small / 420);
             line(scene, x(0), y(i), x(n - 1), y(i), 0, grid_stroke); line(scene, x(i), y(0), x(i), y(n - 1), 0, grid_stroke);
             const std::string col(1, static_cast<char>('A' + i + (i >= 8 ? 1 : 0)));
             text(scene, {x(i) - font / 3, board.y - font / 4, font, font}, font * 2 / 3, col);
             text(scene, {board.x, y(i) - font / 2, font, font}, font * 2 / 3, std::to_string(n - i));
         }
         const int edge = n == 9 ? 2 : 3, center = n / 2;
-        for (int row : {edge, center, n - 1 - edge}) for (int col : {edge, center, n - 1 - edge}) circle(scene, x(col), y(row), std::max(2, font / 10), 0, 0);
+        // Star points must remain distinct from the thicker high-contrast grid.
+        const int hoshi_radius = std::max(grid_stroke * 2, static_cast<int>(std::lround(step * .09)));
+        for (int row : {edge, center, n - 1 - edge}) for (int col : {edge, center, n - 1 - edge}) circle(scene, x(col), y(row), hoshi_radius, 0, 0);
         const int radius = std::max(3, static_cast<int>(step * .45));
         for (int row = 0; row < n; ++row) for (int col = 0; col < n; ++col) {
             const auto stone = model.position.at(col, row);
@@ -214,6 +216,86 @@ Scene make_scene(const ViewModel& model, int width, int height) {
         if (i == 3) button(scene, r, Action::autoplay, model.autoplay ? "Стоп" : "Авто", font, model.has_game && !model.full_comment && (model.autoplay || (model.has_next && model.branches.size() == 1)));
         if (i == 4) button(scene, r, Action::menu, "Меню", font);
     }
+    return scene;
+}
+
+namespace {
+struct LibraryLayout {
+    int margin, font, button, rows_top, row_height, footer;
+    LibraryLayout(int width, int height) {
+        if (width < 320 || height < 320) throw std::runtime_error("Screen too small");
+        const int small = std::min(width, height);
+        margin = std::max(8, small / 80); font = std::max(14, small / 36);
+        button = font * 3; row_height = font * 3 + margin * 2;
+        rows_top = margin * 4 + button * 3 + font * 3 / 2;
+        footer = height - margin - button;
+    }
+};
+}
+std::size_t library_page_capacity(int width, int height) {
+    const LibraryLayout l(width, height);
+    return static_cast<std::size_t>(std::max(1, (l.footer - l.margin - l.rows_top) / l.row_height));
+}
+Scene make_library_scene(const LibraryViewModel& model, int width, int height) {
+    const LibraryLayout l(width, height);
+    Scene scene;
+    auto hit = [&](const Rect& bounds, int command) { scene.controls.push_back({bounds, Action::library_command, command}); };
+    auto control = [&](const Rect& bounds, int command, const std::string& label, bool enabled = true, bool selected = false) {
+        rectangle(scene, bounds, enabled ? 0 : 160, selected ? 0 : 255);
+        text(scene, {bounds.x + l.margin / 2, bounds.y, bounds.w - l.margin, bounds.h}, l.font, label, selected ? 255 : enabled ? 0 : 160, true);
+        if (enabled) hit(bounds, command);
+    };
+    const Rect back{l.margin, l.margin, l.button, l.button};
+    control(back, 900, "");
+    const int cy = back.y + back.h / 2, cx = back.x + back.w / 2, a = l.font / 2, stroke = std::max(2, l.font / 12);
+    line(scene, cx - a, cy, cx + a, cy, 0, stroke);
+    line(scene, cx - a, cy, cx, cy - a, 0, stroke); line(scene, cx - a, cy, cx, cy + a, 0, stroke);
+    const Rect close{width - l.margin - l.button, l.margin, l.button, l.button};
+    control(close, 901, "");
+    const int ccx = close.x + close.w / 2;
+    line(scene, ccx - a, cy - a, ccx + a, cy + a, 0, stroke); line(scene, ccx - a, cy + a, ccx + a, cy - a, 0, stroke);
+    const Rect tools{close.x - l.margin - l.button, l.margin, l.button, l.button};
+    control(tools, 15, "");
+    for (int i = -1; i <= 1; ++i) circle(scene, tools.x + tools.w / 2 + i * l.font / 2, cy, std::max(2, l.font / 12), 0, 0);
+    text(scene, {back.x + back.w + l.margin, l.margin, tools.x - back.x - back.w - 2 * l.margin, l.button}, l.font, "Библиотека");
+    const int info_y = l.margin + l.button;
+    text(scene, {l.margin, info_y, width - 2 * l.margin, l.font * 3 / 2}, l.font * 4 / 5,
+         "Найдено: " + std::to_string(model.matching) + " из " + std::to_string(model.total));
+    const int tabs_y = info_y + l.font * 3 / 2 + l.margin, tab_width = (width - 4 * l.margin) / 3;
+    const char* tabs[] = {"Все", "Новые", "Просмотренные"};
+    for (int i = 0; i < 3; ++i) control({l.margin + i * (tab_width + l.margin), tabs_y, tab_width, l.button}, 20 + i, tabs[i], true, model.status == i);
+    const int search_y = tabs_y + l.button + l.margin, search_width = (width - 3 * l.margin) * 3 / 5;
+    control({l.margin, search_y, search_width, l.button}, 12, model.query.empty() ? "Поиск по партиям" : "Поиск: " + model.query);
+    control({l.margin * 2 + search_width, search_y, width - search_width - 3 * l.margin, l.button}, 11, "Год: " + (model.year.empty() ? "все" : model.year == "unknown" ? "без даты" : model.year));
+    const auto count = std::min(model.rows.size(), library_page_capacity(width, height));
+    for (std::size_t i = 0; i < count; ++i) {
+        const int y = l.rows_top + static_cast<int>(i) * l.row_height;
+        const Rect row{l.margin, y, width - l.margin * 2, l.row_height};
+        hit(row, 1000 + static_cast<int>(i));
+        text(scene, {row.x + l.margin, y, row.w - 2 * l.margin, l.font * 3 / 2}, l.font, model.rows[i].title);
+        text(scene, {row.x + l.margin, y + l.font * 3 / 2, row.w - 2 * l.margin, l.font * 3 / 2}, l.font * 4 / 5, model.rows[i].detail);
+        line(scene, row.x, y + row.h - 1, row.x + row.w, y + row.h - 1, 160);
+    }
+    if (model.rows.empty()) {
+        const std::string message = model.total ? "По этим условиям партий нет" : "В библиотеке пока нет партий";
+        text(scene, {l.margin, l.rows_top, width - 2 * l.margin, l.row_height}, l.font, message, 0, true);
+    }
+    const int nav_width = (width - 5 * l.margin) / 7;
+    const Rect previous{l.margin, l.footer, nav_width, l.button};
+    const Rect next{l.margin * 3 + nav_width * 3, l.footer, nav_width, l.button};
+    for (const auto& item : {std::make_pair(previous, 2), std::make_pair(next, 3)}) {
+        const auto& r = item.first; const bool left = item.second == 2;
+        const bool enabled = left ? model.page > 0 : model.page + 1 < model.pages;
+        control(r, item.second, "", enabled);
+        const int x = r.x + r.w / 2, y = r.y + r.h / 2, ink = enabled ? 0 : 160;
+        line(scene, x - a, y, x + a, y, ink, stroke);
+        line(scene, x + (left ? -a : a), y, x, y - a, ink, stroke);
+        line(scene, x + (left ? -a : a), y, x, y + a, ink, stroke);
+    }
+    text(scene, {l.margin * 2 + nav_width, l.footer, nav_width * 2, l.button}, l.font,
+         std::to_string(model.page + 1) + " / " + std::to_string(model.pages), 0, true);
+    const int random_x = next.x + next.w + l.margin;
+    control({random_x, l.footer, width - random_x - l.margin, l.button}, 140, "Случайная новая");
     return scene;
 }
 
