@@ -35,7 +35,6 @@ bool is_sgf(std::string name) {
     return name.size() >= 4 && name.substr(name.size() - 4) == ".sgf";
 }
 int gray(int color) { return (color << 16) | (color << 8) | color; }
-void menu_callback(int);
 void confirm_callback(int);
 void search_callback(char*);
 void move_callback(char*);
@@ -59,25 +58,34 @@ public:
                 if (!launch_action.empty()) association(launch_action == "--install");
             } else if (type == EVT_SHOW || type == EVT_FOREGROUND) {
                 resume_autoplay();
-                if (splash_visible) show_splash(); else if (library_visible) show_library(); else draw(true);
+                if (splash_visible) show_splash(); else if (library_visible) show_library(); else if (menu_visible) draw_menu(); else draw(true);
             }
             else if (type == EVT_EXIT) finish(false);
             else if (type == EVT_HIDE || type == EVT_BACKGROUND) { suspend_autoplay(); ClearTimer(startup_callback); splash_visible = false; persist(); }
-            else if (type == EVT_ORIENTATION) { stop_autoplay(); ClearTimer(startup_callback); splash_visible = false; SetOrientation(p1); if (library_visible) show_library(); else draw(true); }
+            else if (type == EVT_ORIENTATION) { stop_autoplay(); ClearTimer(startup_callback); splash_visible = false; SetOrientation(p1); if (library_visible) show_library(); else if (menu_visible) draw_menu(); else draw(true); }
             else if (type == EVT_POINTERUP) {
                 if (splash_visible) { finish_startup(); return 0; }
                 for (const auto& control : scene.controls) if (control.bounds.contains(p1, p2)) {
-                    if (control.action == Action::library_command) select(control.value); else act(control.action);
+                    const auto action = control.action; const int value = control.value;
+                    if (action == Action::library_command || action == Action::menu_command) select(value); else act(action);
                     break;
                 }
             } else if (type == EVT_KEYPRESS || type == EVT_KEYREPEAT) {
                 if (splash_visible) { finish_startup(); return 0; }
+                if (menu_visible) {
+                    if (p1 == IV_KEY_BACK) menu_back();
+                    else if (p1 == IV_KEY_MENU) show_main();
+                    else if (p1 == IV_KEY_OK && menu_view.focus >= 0 && static_cast<std::size_t>(menu_view.focus) < menu_view.options.size()) select(menu_view.options[menu_view.focus].first);
+                    else if (p1 == IV_KEY_NEXT || p1 == IV_KEY_NEXT2 || p1 == IV_KEY_RIGHT || p1 == IV_KEY_DOWN) move_menu_focus(1);
+                    else if (p1 == IV_KEY_PREV || p1 == IV_KEY_PREV2 || p1 == IV_KEY_LEFT || p1 == IV_KEY_UP) move_menu_focus(-1);
+                    ForcingSleep(); return 0;
+                }
                 if (library_visible) {
                     if (p1 == IV_KEY_NEXT || p1 == IV_KEY_NEXT2 || p1 == IV_KEY_RIGHT) select(3);
                     else if (p1 == IV_KEY_PREV || p1 == IV_KEY_PREV2 || p1 == IV_KEY_LEFT) select(2);
                     else if (p1 == IV_KEY_BACK) menu_back();
                     else if (p1 == IV_KEY_MENU || p1 == IV_KEY_OK) show_library_tools();
-                    return 0;
+                    ForcingSleep(); return 0;
                 }
                 if (p1 == IV_KEY_NEXT || p1 == IV_KEY_NEXT2 || p1 == IV_KEY_RIGHT) act(full_comment ? Action::comment_next : Action::next);
                 else if (p1 == IV_KEY_PREV || p1 == IV_KEY_PREV2 || p1 == IV_KEY_LEFT) act(full_comment ? Action::comment_previous : Action::previous);
@@ -91,10 +99,17 @@ public:
 
     void select(int index) {
         try {
-            if (!index) { draw(true); return; }
+            if (!index) { close_menu(); return; }
             if (index == 900) { menu_back(); return; }
-            if (index == 901 && library_visible) { draw(true); return; }
-            if (std::none_of(menu.begin(), menu.end(), [&](const imenu& item) { return item.type == ITEM_ACTIVE && item.index == index; })) { return; }
+            if (index == 901 && (library_visible || menu_visible)) { close_menu(); return; }
+            if (std::none_of(scene.controls.begin(), scene.controls.end(), [&](const Control& item) {
+                return (item.action == Action::menu_command || item.action == Action::library_command) && item.value == index;
+            })) return;
+            if (menu_visible && (index == 902 || index == 903)) {
+                if (index == 902 && menu_view.page) --menu_view.page;
+                else if (index == 903) ++menu_view.page;
+                menu_view.focus = -1; draw_menu(); return;
+            }
             if (index == 140) { open_random(); return; }
             if (action_menu()) {
                 if (index == 130) { show_game_actions(); return; }
@@ -107,9 +122,9 @@ public:
                 if (index == 135) { open_move_keyboard(); return; }
                 if (index == 136) { act(Action::back_ten); return; }
                 if (index == 137) { act(Action::forward_ten); return; }
-                if (index == 100) { files_from_library = mode == Menu::library_tools; page = 0; show_files(); return; }
-                if (index == 102) { page = 0; show_games(); return; }
-                if (index == 103) { page = 0; show_variants(); return; }
+                if (index == 100) { files_from_library = mode == Menu::library_tools; show_files(); return; }
+                if (index == 102) { show_games(); return; }
+                if (index == 103) { show_variants(); return; }
                 if (index == 104 && viewer) { full_comment = false; information = false; if (viewer->previous_branch()) changed(); }
                 if (index == 105 && viewer) { act(Action::first); return; }
                 if (index == 106 && viewer) { act(Action::last); return; }
@@ -136,31 +151,25 @@ public:
             } else if (mode == Menu::files) {
                 if (index == 1) {
                     if (directory != root) { const auto slash = directory.find_last_of('/'); directory = slash == 0 ? "/" : directory.substr(0, slash); }
-                    page = 0; show_files(); return;
+                    show_files(); return;
                 }
-                if (index == 2) { if (page) --page; show_files(); return; }
-                if (index == 3) { ++page; show_files(); return; }
-                const auto offset = page * page_size + static_cast<std::size_t>(index - 1000);
+                const auto offset = static_cast<std::size_t>(index - 1000);
                 if (index >= 1000 && offset < entries.size()) {
                     const auto selected = entries[offset];
-                    if (selected.directory) { directory = selected.path; page = 0; show_files(); return; }
+                    if (selected.directory) { directory = selected.path; show_files(); return; }
                     open_file(selected.path);
                 }
             } else if (mode == Menu::variants && viewer) {
-                if (index == 2) { if (page) --page; show_variants(); return; }
-                if (index == 3) { ++page; show_variants(); return; }
-                if (index >= 1000) { viewer->next(page * page_size + static_cast<std::size_t>(index - 1000)); changed(); }
+                if (index >= 1000) { viewer->next(static_cast<std::size_t>(index - 1000)); changed(); }
             } else if (mode == Menu::games && viewer) {
-                if (index == 2) { if (page) --page; show_games(); return; }
-                if (index == 3) { ++page; show_games(); return; }
-                if (index >= 1000) { viewer->select_game(page * page_size + static_cast<std::size_t>(index - 1000)); manual = "auto"; resolve_encoding(); changed(); }
+                if (index >= 1000) { viewer->select_game(static_cast<std::size_t>(index - 1000)); manual = "auto"; resolve_encoding(); changed(); }
             } else if (mode == Menu::library) {
                 if (index >= 20 && index <= 22) {
                     library_filter.status = index == 20 ? ReadFilter::all : index == 21 ? ReadFilter::new_only : ReadFilter::viewed_only;
                     library_page = 0; show_library(); return;
                 }
                 if (index == 15) { show_library_tools(); return; }
-                if (index == 11) { page = 0; show_years(); return; }
+                if (index == 11) { show_years(); return; }
                 if (index == 12) {
                     std::strncpy(search_buffer, library_filter.query.c_str(), sizeof(search_buffer) - 1);
                     search_buffer[sizeof(search_buffer) - 1] = 0;
@@ -172,9 +181,7 @@ public:
                 if (index >= 1000 && offset < library_rows.size()) open_file(root + '/' + library.records()[library_rows[offset]].path);
             } else if (mode == Menu::library_years) {
                 if (index == 1) { library_filter.year.clear(); library_page = 0; show_library(); return; }
-                if (index == 2) { if (page) --page; show_years(); return; }
-                if (index == 3) { ++page; show_years(); return; }
-                const auto offset = page * page_size + static_cast<std::size_t>(index - 1000);
+                const auto offset = static_cast<std::size_t>(index - 1000);
                 if (index >= 1000 && offset < year_rows.size()) library_filter.year = year_rows[offset];
                 library_page = 0; show_library(); return;
             } else if (mode == Menu::refresh_settings) {
@@ -221,7 +228,7 @@ public:
                 library.erase(file); viewer.reset(); file.clear(); source_id.clear(); dirty = false;
                 full_comment = false; information = false;
                 write_file_atomic(state_dir + "/last", "");
-                page = 0; show_library();
+                show_library();
             }
         } catch (const std::exception& e) { draw(true); error(e.what()); }
     }
@@ -245,7 +252,6 @@ public:
     }
 
 private:
-    static constexpr std::size_t page_size = 10;
     Library library;
     std::unique_ptr<Viewer> viewer;
     std::string file, source_id, manual = "auto", encoding_error, directory;
@@ -253,13 +259,14 @@ private:
     bool full_comment = false, information = false, about = false, dirty = false;
     bool library_visible = false, files_from_library = false;
     std::size_t library_page = 0;
-    std::size_t comment_page = 0, page = 0;
+    std::size_t comment_page = 0;
     unsigned refreshes = 0;
     Menu mode = Menu::main;
     Scene scene;
     std::vector<Entry> entries;
-    std::vector<std::string> labels;
-    std::vector<imenu> menu;
+    MenuViewModel menu_view;
+    std::size_t menu_capacity = 0;
+    bool menu_visible = false;
     std::map<int, ifont*> fonts;
     LibraryFilter library_filter;
     std::vector<std::size_t> library_rows;
@@ -542,7 +549,7 @@ private:
         }
     }
     void draw(bool full = false) {
-        library_visible = false;
+        library_visible = false; menu_visible = false;
         full = full || menu_overlay;
         menu_overlay = false;
         const int width = ScreenWidth(), height = ScreenHeight();
@@ -586,9 +593,13 @@ private:
             PartialUpdate(left, top, std::min(width, right) - left, std::min(height, bottom) - top);
         }
     }
+    void close_menu() {
+        full_comment = false; information = false; about = false; comment_page = 0;
+        draw(true);
+    }
     void menu_back() {
         switch (mode) {
-        case Menu::main: draw(true); break;
+        case Menu::main: close_menu(); break;
         case Menu::navigation: case Menu::variants: case Menu::games: show_game_actions(); break;
         case Menu::refresh_settings: case Menu::encodings: case Menu::pauses: case Menu::logos: case Menu::associations: show_settings(); break;
         case Menu::library_years: case Menu::library_tools: show_library(); break;
@@ -597,17 +608,38 @@ private:
         default: show_main(); break;
         }
     }
+    void draw_menu() {
+        const auto capacity = menu_page_capacity(ScreenWidth(), ScreenHeight());
+        const auto pages = std::max<std::size_t>(1, (menu_view.options.size() + capacity - 1) / capacity);
+        if (menu_view.focus < 0 && menu_capacity && menu_capacity != capacity)
+            menu_view.page = menu_view.page * menu_capacity / capacity;
+        menu_capacity = capacity;
+        if (menu_view.focus >= 0) menu_view.page = static_cast<std::size_t>(menu_view.focus) / capacity;
+        menu_view.page = std::min(menu_view.page, pages - 1);
+        scene = make_menu_scene(menu_view, ScreenWidth(), ScreenHeight());
+        paint(scene); FullUpdate(); refreshes = 0;
+    }
+    void move_menu_focus(int delta) {
+        if (menu_view.options.empty()) return;
+        const auto capacity = menu_page_capacity(ScreenWidth(), ScreenHeight());
+        if (menu_view.focus < 0) menu_view.focus = static_cast<int>(menu_view.page * capacity);
+        else menu_view.focus = std::max(0, std::min(static_cast<int>(menu_view.options.size()) - 1, menu_view.focus + delta));
+        draw_menu();
+    }
     void show(Menu selected, const std::string& title, std::vector<std::pair<int, std::string>> options) {
-        if (selected != Menu::main) options.insert(options.begin(), {900, "←"});
         stop_autoplay();
-        menu_overlay = true; library_visible = false;
-        mode = selected; labels.clear(); menu.clear(); labels.reserve(options.size() + 1); menu.reserve(options.size() + 2);
-        labels.push_back(title);
-        for (const auto& option : options) labels.push_back(option.second);
-        menu.push_back({ITEM_HEADER, 0, &labels[0][0], nullptr});
-        for (std::size_t i = 0; i < options.size(); ++i) menu.push_back({ITEM_ACTIVE, static_cast<short>(options[i].first), &labels[i + 1][0], nullptr});
-        menu.push_back({0, 0, nullptr, nullptr});
-        OpenMenu(menu.data(), 0, ScreenWidth() / 10, ScreenHeight() / 10, menu_callback);
+        menu_overlay = true; library_visible = false; menu_visible = true;
+        mode = selected; menu_view = MenuViewModel{}; menu_capacity = 0;
+        menu_view.title = title;
+        if (selected == Menu::pauses || selected == Menu::refresh_settings || selected == Menu::logos) {
+            const std::string mark = " ✓";
+            for (auto& option : options) if (option.second.size() >= mark.size() &&
+                option.second.compare(option.second.size() - mark.size(), mark.size(), mark) == 0) {
+                menu_view.checked = option.first; option.second.resize(option.second.size() - mark.size());
+            }
+        }
+        menu_view.options = std::move(options);
+        draw_menu();
     }
     void show_main() {
         if (about) { about = false; full_comment = false; comment_page = 0; }
@@ -646,10 +678,6 @@ private:
         if (viewer) options.push_back({107, "Кодировка: " + (manual == "auto" ? "Авто" : manual)});
         options.insert(options.end(), {{138, "Обновление экрана…"}, {116, "Пауза автолистания: " + std::to_string(pause_seconds) + " с"}, {118, "Логотип при запуске"}, {112, "Повернуть экран"}, {133, "Ассоциация SGF…"}, {139, "О программе"}});
         show(Menu::settings, "Настройки", options);
-    }
-    void pagers(std::vector<std::pair<int, std::string>>& options, std::size_t count) {
-        if (page) options.push_back({2, "< Предыдущая страница"});
-        if ((page + 1) * page_size < count) options.push_back({3, "Следующая страница >"});
     }
     void open_random() {
         stop_autoplay();
@@ -693,18 +721,15 @@ private:
             value.rows.push_back({title, detail});
         }
         scene = make_library_scene(value, ScreenWidth(), ScreenHeight());
-        mode = Menu::library; library_visible = true; menu_overlay = false;
-        menu.clear();
-        for (const auto& c : scene.controls) menu.push_back({ITEM_ACTIVE, static_cast<short>(c.value), nullptr, nullptr});
+        mode = Menu::library; library_visible = true; menu_visible = false; menu_overlay = false;
         paint(scene); FullUpdate(); refreshes = 0;
     }
     void show_years() {
         year_rows = library.years();
-        page = std::min(page, year_rows.empty() ? std::size_t{0} : (year_rows.size() - 1) / page_size);
         std::vector<std::pair<int, std::string>> options{{1, "Все годы"}};
-        for (std::size_t i = page * page_size; i < std::min(year_rows.size(), (page + 1) * page_size); ++i)
-            options.push_back({1000 + static_cast<int>(i % page_size), year_rows[i] == "unknown" ? "Без даты" : year_rows[i]});
-        pagers(options, year_rows.size()); show(Menu::library_years, "Год партии", options);
+        for (std::size_t i = 0; i < year_rows.size(); ++i)
+            options.push_back({1000 + static_cast<int>(i), year_rows[i] == "unknown" ? "Без даты" : year_rows[i]});
+        show(Menu::library_years, "Год партии", options);
     }
     void request_file_action(int action) {
         const auto* selected = library.find(file);
@@ -731,10 +756,9 @@ private:
         std::sort(entries.begin(), entries.end(), [](const Entry& a, const Entry& b) { return a.directory != b.directory ? a.directory > b.directory : a.name < b.name; });
         std::vector<std::pair<int, std::string>> options;
         if (directory != root) options.push_back({1, "[..]"});
-        page = std::min(page, entries.empty() ? std::size_t{0} : (entries.size() - 1) / page_size);
-        for (std::size_t i = page * page_size; i < std::min(entries.size(), (page + 1) * page_size); ++i) options.push_back({1000 + static_cast<int>(i % page_size), entries[i].directory ? '[' + entries[i].name + ']' : entries[i].name});
-        pagers(options, entries.size());
-        show(Menu::files, directory, options);
+        for (std::size_t i = 0; i < entries.size(); ++i) options.push_back({1000 + static_cast<int>(i), entries[i].directory ? '[' + entries[i].name + ']' : entries[i].name});
+
+        show(Menu::files, directory == root ? "Открыть SGF" : basename(directory), options);
     }
     void show_encodings() {
         if (!viewer) return;
@@ -746,26 +770,26 @@ private:
         if (!viewer) return;
         const auto& children = viewer->node().children;
         std::vector<std::pair<int, std::string>> options;
-        for (std::size_t i = page * page_size; i < std::min(children.size(), (page + 1) * page_size); ++i) {
+        for (std::size_t i = 0; i < children.size(); ++i) {
             const auto& n = viewer->game().nodes[children[i]];
             std::string title = std::to_string(i + 1) + ". " + (n.find("B") ? "B[" + n.value("B") + ']' : n.find("W") ? "W[" + n.value("W") + ']' : "Комментарий/позиция");
             const auto note = !n.value("N").empty() ? n.value("N") : n.value("C");
             if (!note.empty() && encoding_error.empty()) { const auto lines = wrap_text(decode(note), 36); title += " — " + lines[0]; }
-            options.push_back({1000 + static_cast<int>(i % page_size), title});
+            options.push_back({1000 + static_cast<int>(i), title});
         }
-        pagers(options, children.size());
+
         show(Menu::variants, children.empty() ? "Продолжений нет" : "Варианты продолжения", options);
     }
     void show_games() {
         if (!viewer) return;
         std::vector<std::pair<int, std::string>> options;
-        for (std::size_t i = page * page_size; i < std::min(viewer->collection().games.size(), (page + 1) * page_size); ++i) {
+        for (std::size_t i = 0; i < viewer->collection().games.size(); ++i) {
             const auto& game = viewer->collection().games[i];
             std::string title = "Партия " + std::to_string(i + 1);
             try { const auto e = choose_encoding(game_text_sample(game), game.nodes[0].value("CA")); const auto name = game.nodes[0].value("GN"); if (!name.empty()) title += ": " + decode_text(name, e.name); } catch (const std::exception&) {}
-            options.push_back({1000 + static_cast<int>(i % page_size), title});
+            options.push_back({1000 + static_cast<int>(i), title});
         }
-        pagers(options, viewer->collection().games.size()); show(Menu::games, "Партии в SGF", options);
+        show(Menu::games, "Партии в SGF", options);
     }
     void association(bool install) {
         if (install) {
@@ -793,7 +817,7 @@ private:
             full_comment = false; information = false; draw(); return;
         }
         if (action == Action::menu) { show_main(); return; }
-        if (action == Action::variations) { page = 0; show_variants(); return; }
+        if (action == Action::variations) { show_variants(); return; }
         if (action == Action::toggle_comment) { full_comment = !full_comment; information = false; comment_page = 0; }
         else if (action == Action::comment_previous) { if (comment_page) --comment_page; }
         else if (action == Action::comment_next) { if (comment_page + 1 < scene.comment_pages) ++comment_page; }
@@ -804,7 +828,6 @@ private:
 };
 
 std::unique_ptr<Application> application;
-void menu_callback(int index) { application->select(index); }
 void confirm_callback(int button) { application->confirm(button); }
 void search_callback(char* text) { application->search(text); }
 void move_callback(char* text) { application->move_to(text); }

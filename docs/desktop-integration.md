@@ -11,7 +11,7 @@ Python и дополнительные библиотеки на ней не н�
 ```bash
 python3 scripts/install-mounted-reader.py \
   --root /path/to/mounted-reader \
-  --archive dist/Era-SGF-1.1.0-b288.zip \
+  --archive dist/Era-SGF-1.1.1-b288.zip \
   --backup-dir local/reader-backups
 ```
 
@@ -26,7 +26,7 @@ python3 scripts/install-mounted-reader.py \
 ```bash
 python3 scripts/install-mounted-reader.py \
   --root /path/to/mounted-reader \
-  --archive dist/Era-SGF-1.1.0-b288.zip \
+  --archive dist/Era-SGF-1.1.1-b288.zip \
   --backup-dir local/reader-backups \
   --apply
 ```

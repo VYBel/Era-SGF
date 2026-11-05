@@ -51,7 +51,7 @@ linked statically, as is the SDK zlib used to compress PNG screenshots; InkView 
 Outputs:
 
 - `build/pocketbook/era-sgf.app`: stripped ARM ELF executable.
-- `dist/Era-SGF-1.1.0-b288.zip`: install archive, containing one `.app` and two BMP icons.
+- `dist/Era-SGF-1.1.1-b288.zip`: install archive, containing one `.app` and two BMP icons.
 - The adjacent `.zip.sha256`: archive checksum.
 
 For an already extracted compatible SDK, set `POCKETBOOK_SDK` to its `SDK-B288` directory

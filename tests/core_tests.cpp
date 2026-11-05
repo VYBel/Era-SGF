@@ -23,6 +23,53 @@ void test(const char* name, const std::function<void()>& f) {
 }
 
 int main() {
+    test("custom menus center the header and expose every row without overlapping controls", [] {
+        for (const auto dimensions : {std::pair<int,int>{320,320}, {600,800}, {1264,1680}, {1680,1264}}) {
+            MenuViewModel model; model.title = "Очень длинный заголовок меню с дополнительным пояснением";
+            for (int i = 0; i < 31; ++i) model.options.push_back({1000 + i, "Пункт " + std::to_string(i)});
+            const auto capacity = menu_page_capacity(dimensions.first, dimensions.second);
+            std::size_t total_rows = 0;
+            for (model.page = 0; model.page * capacity < model.options.size(); ++model.page) {
+                auto scene = make_menu_scene(model, dimensions.first, dimensions.second);
+                CHECK(scene.controls[0].value == 900); CHECK(scene.controls[1].value == 901);
+                CHECK(scene.controls[0].bounds.y == scene.controls[1].bounds.y);
+                for (const auto& op : scene.drawing) if (op.kind == DrawKind::text && op.bounds.y == scene.controls[0].bounds.y) {
+                    CHECK(op.centered); CHECK(op.bounds.x * 2 + op.bounds.w == dimensions.first);
+                    CHECK(op.bounds.x >= scene.controls[0].bounds.x + scene.controls[0].bounds.w);
+                    CHECK(op.bounds.x + op.bounds.w <= scene.controls[1].bounds.x);
+                    CHECK(op.text != "←");
+                }
+                for (std::size_t i = 0; i < scene.controls.size(); ++i) {
+                    const auto& c = scene.controls[i];
+                    if (c.value >= 1000) { CHECK(c.value == 1000 + static_cast<int>(total_rows)); ++total_rows; }
+                    CHECK(c.bounds.w >= 40 && c.bounds.h >= 40);
+                    CHECK(c.bounds.x >= 0 && c.bounds.y >= 0);
+                    CHECK(c.bounds.x + c.bounds.w <= dimensions.first && c.bounds.y + c.bounds.h <= dimensions.second);
+                    for (std::size_t j = i + 1; j < scene.controls.size(); ++j) {
+                        const auto& d = scene.controls[j].bounds;
+                        CHECK(c.bounds.x + c.bounds.w <= d.x || d.x + d.w <= c.bounds.x || c.bounds.y + c.bounds.h <= d.y || d.y + d.h <= c.bounds.y);
+                    }
+                }
+            }
+            CHECK(total_rows == model.options.size());
+        }
+    });
+    test("selected menu option uses a geometric tick instead of a firmware glyph", [] {
+        MenuViewModel model; model.title = "Пауза"; model.options = {{300, "1 с"}, {302, "3 с"}}; model.checked = 302;
+        const auto scene = make_menu_scene(model, 1264, 1680);
+        bool tick = false;
+        for (const auto& op : scene.drawing) {
+            if (op.kind == DrawKind::text) CHECK(op.text.find("✓") == std::string::npos);
+            if (op.kind == DrawKind::line && op.bounds.x > 1100 && op.bounds.y > 200 && op.bounds.h != 0) tick = true;
+        }
+        CHECK(tick);
+    });
+    test("empty custom menu has back close and no active pagination", [] {
+        MenuViewModel model; model.title = "Пустое меню"; model.page = 999;
+        const auto scene = make_menu_scene(model, 600, 800);
+        CHECK(scene.controls.size() == 2);
+        CHECK(std::any_of(scene.drawing.begin(), scene.drawing.end(), [](const DrawOp& op) { return op.text == "Список пуст"; }));
+    });
     test("library layout has reachable nonoverlapping controls in both orientations", [] {
         for (const auto dimensions : {std::pair<int, int>{320,320}, {600,800}, {1264,1680}, {1680,1264}}) {
             LibraryViewModel model; model.total = model.matching = 1700; model.pages = 200; model.page = 1;

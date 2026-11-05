@@ -18,7 +18,7 @@ struct DrawOp {
     bool centered = false;
     int stroke_width = 1;
 };
-enum class Action { information, refresh, previous, next, variations, menu, comment_previous, comment_next, toggle_comment, autoplay, first, back_ten, go_to_move, forward_ten, last, library_command };
+enum class Action { information, refresh, previous, next, variations, menu, comment_previous, comment_next, toggle_comment, autoplay, first, back_ten, go_to_move, forward_ten, last, library_command, menu_command };
 struct Control { Rect bounds; Action action; int value = 0; };
 struct BranchHint { Optional<Point> point; std::string label; };
 struct ViewModel {
@@ -46,6 +46,15 @@ struct Scene {
     std::size_t comment_page = 0;
 };
 Scene make_scene(const ViewModel& model, int width, int height);
+struct MenuViewModel {
+    std::string title;
+    std::vector<std::pair<int, std::string>> options;
+    std::size_t page = 0;
+    int focus = -1;
+    int checked = -1;
+};
+std::size_t menu_page_capacity(int width, int height);
+Scene make_menu_scene(const MenuViewModel& model, int width, int height);
 struct LibraryViewRow { std::string title, detail; };
 struct LibraryViewModel {
     std::vector<LibraryViewRow> rows;

@@ -20,7 +20,6 @@ namespace {
 bool closed = false;
 bool auto_keylock = true, auto_poweroff = true, active = true, locked = false;
 int orientation = 0;
-iv_menuhandler selection = nullptr;
 iv_dialoghandler confirmation = nullptr;
 iv_keyboardhandler keyboard = nullptr;
 std::vector<std::string> frame;
@@ -63,10 +62,10 @@ void InkViewMain(iv_handler handler) {
     while (!closed && std::getline(events, event, ';')) {
         if (event == "next") handler(EVT_KEYPRESS, IV_KEY_NEXT, 0);
         else if (event == "previous") handler(EVT_KEYPRESS, IV_KEY_PREV, 0);
+        else if (event == "ok") handler(EVT_KEYPRESS, IV_KEY_OK, 0);
         else if (event == "menu") handler(EVT_KEYPRESS, IV_KEY_MENU, 0);
         else if (event == "back") handler(EVT_KEYPRESS, IV_KEY_BACK, 0);
         else if (event == "rotate") { orientation = 1; handler(EVT_ORIENTATION, 1, 0); }
-        else if (event.rfind("select:", 0) == 0 && selection) { auto callback = selection; selection = nullptr; callback(std::stoi(event.substr(7))); }
         else if (event.rfind("confirm:", 0) == 0 && confirmation) { auto callback = confirmation; confirmation = nullptr; callback(std::stoi(event.substr(8))); }
         else if (event.rfind("text:", 0) == 0 && keyboard) {
             auto callback = keyboard; keyboard = nullptr;
@@ -142,10 +141,6 @@ void SetFont(const ifont*, int) {}
 char* DrawTextRect(int x, int y, int w, int h, const char* text, int) { frame.emplace_back(text); text_hits.push_back({x,y,w,h,text}); return nullptr; }
 void FullUpdate() { std::cout << "UPDATE_FULL\n"; emit(); }
 void PartialUpdate(int, int, int, int) { std::cout << "UPDATE_PARTIAL\n"; emit(); }
-void OpenMenu(imenu* menu, int, int, int, iv_menuhandler callback) {
-    selection = callback; std::cout << "MENU\n";
-    for (auto p = menu; p && p->type; ++p) std::cout << p->index << ':' << p->text << '\n';
-}
 
 void Message(int, const char* title, const char* text, int) { std::cout << "MESSAGE " << title << ": " << text << '\n'; }
 void Dialog(int, const char* title, const char* text, const char* yes, const char* no, iv_dialoghandler callback) {

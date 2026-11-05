@@ -220,6 +220,37 @@ Scene make_scene(const ViewModel& model, int width, int height) {
 }
 
 namespace {
+// Shared by every application menu and the library. Header title stays centered
+// between equal-size Back and Close hit areas, independently of its text length.
+void screen_header(Scene& scene, int width, int margin, int font, int size,
+                   const std::string& title, Action action) {
+    const Rect back{margin, margin, size, size}, close{width - margin - size, margin, size, size};
+    for (const auto& item : {std::make_pair(back, 900), std::make_pair(close, 901)}) {
+        rectangle(scene, item.first, 0, 255);
+        scene.controls.push_back({item.first, action, item.second});
+    }
+    const int cy = margin + size / 2, cx = back.x + size / 2;
+    const int a = font / 2, stroke = std::max(2, font / 12), ccx = close.x + size / 2;
+    line(scene, cx - a, cy, cx + a, cy, 0, stroke);
+    line(scene, cx - a, cy, cx, cy - a, 0, stroke);
+    line(scene, cx - a, cy, cx, cy + a, 0, stroke);
+    line(scene, ccx - a, cy - a, ccx + a, cy + a, 0, stroke);
+    line(scene, ccx - a, cy + a, ccx + a, cy - a, 0, stroke);
+    const Rect title_box{2 * margin + size, margin, width - 4 * margin - 2 * size, size};
+    const int title_font = std::max(font * 3 / 4, std::min(font, title_box.w * 10 /
+        std::max(1, static_cast<int>(characters(title).size()) * 6)));
+    text(scene, title_box, title_font, title, 0, true);
+}
+struct MenuLayout {
+    int margin, font, button, top, row, footer;
+    MenuLayout(int width, int height) {
+        if (width < 320 || height < 320) throw std::runtime_error("Screen too small");
+        const int small = std::min(width, height);
+        margin = std::max(8, small / 80); font = std::max(14, small / 36);
+        button = font * 3; top = margin * 3 + button;
+        row = font * 3 + margin; footer = height - margin - button;
+    }
+};
 struct LibraryLayout {
     int margin, font, button, rows_top, row_height, footer;
     LibraryLayout(int width, int height) {
@@ -227,10 +258,51 @@ struct LibraryLayout {
         const int small = std::min(width, height);
         margin = std::max(8, small / 80); font = std::max(14, small / 36);
         button = font * 3; row_height = font * 3 + margin * 2;
-        rows_top = margin * 4 + button * 3 + font * 3 / 2;
+        rows_top = margin * 4 + button * 3 + std::max(40, font * 3 / 2);
         footer = height - margin - button;
     }
 };
+}
+std::size_t menu_page_capacity(int width, int height) {
+    const MenuLayout l(width, height);
+    return static_cast<std::size_t>(std::max(1, (l.footer - l.margin - l.top) / l.row));
+}
+Scene make_menu_scene(const MenuViewModel& model, int width, int height) {
+    const MenuLayout l(width, height);
+    Scene scene;
+    screen_header(scene, width, l.margin, l.font, l.button, model.title, Action::menu_command);
+    const auto capacity = menu_page_capacity(width, height);
+    const auto pages = std::max<std::size_t>(1, (model.options.size() + capacity - 1) / capacity);
+    const auto page = std::min(model.page, pages - 1), begin = page * capacity;
+    for (std::size_t i = begin; i < std::min(model.options.size(), begin + capacity); ++i) {
+        const Rect row{l.margin, l.top + static_cast<int>(i - begin) * l.row, width - 2 * l.margin, l.row};
+        const bool focused = static_cast<int>(i) == model.focus;
+        if (focused) rectangle(scene, row, 0, 0);
+        text(scene, {row.x + l.font, row.y, row.w - 3 * l.font, row.h}, l.font, model.options[i].second, focused ? 255 : 0);
+        if (model.options[i].first == model.checked) {
+            const int x = row.x + row.w - l.font * 3 / 2, y = row.y + row.h / 2, a = l.font / 3;
+            line(scene, x - a, y, x, y + a, focused ? 255 : 0, 3);
+            line(scene, x, y + a, x + 2 * a, y - a, focused ? 255 : 0, 3);
+        }
+        line(scene, row.x, row.y + row.h - 1, row.x + row.w - 1, row.y + row.h - 1, 160);
+        scene.controls.push_back({row, Action::menu_command, model.options[i].first});
+    }
+    if (model.options.empty()) text(scene, {l.margin, l.top, width - 2 * l.margin, l.row}, l.font, "Список пуст", 0, true);
+    if (pages > 1) {
+        for (int i = 0; i < 2; ++i) {
+            const Rect r{i ? width - l.margin - l.button * 2 : l.margin, l.footer, l.button * 2, l.button};
+            const bool enabled = i ? page + 1 < pages : page > 0;
+            button(scene, r, Action::menu_command, "", l.font, false);
+            if (enabled) scene.controls.push_back({r, Action::menu_command, i ? 903 : 902});
+            const int x = r.x + r.w / 2, y = r.y + r.h / 2, a = l.font / 2, ink = enabled ? 0 : 160;
+            line(scene, x - a, y, x + a, y, ink, 2);
+            line(scene, x + (i ? a : -a), y, x, y - a, ink, 2);
+            line(scene, x + (i ? a : -a), y, x, y + a, ink, 2);
+        }
+        text(scene, {l.margin + l.button * 2, l.footer, width - 2 * l.margin - 4 * l.button, l.button}, l.font,
+             std::to_string(page + 1) + " / " + std::to_string(pages), 0, true);
+    }
+    return scene;
 }
 std::size_t library_page_capacity(int width, int height) {
     const LibraryLayout l(width, height);
@@ -245,23 +317,16 @@ Scene make_library_scene(const LibraryViewModel& model, int width, int height) {
         text(scene, {bounds.x + l.margin / 2, bounds.y, bounds.w - l.margin, bounds.h}, l.font, label, selected ? 255 : enabled ? 0 : 160, true);
         if (enabled) hit(bounds, command);
     };
-    const Rect back{l.margin, l.margin, l.button, l.button};
-    control(back, 900, "");
-    const int cy = back.y + back.h / 2, cx = back.x + back.w / 2, a = l.font / 2, stroke = std::max(2, l.font / 12);
-    line(scene, cx - a, cy, cx + a, cy, 0, stroke);
-    line(scene, cx - a, cy, cx, cy - a, 0, stroke); line(scene, cx - a, cy, cx, cy + a, 0, stroke);
-    const Rect close{width - l.margin - l.button, l.margin, l.button, l.button};
-    control(close, 901, "");
-    const int ccx = close.x + close.w / 2;
-    line(scene, ccx - a, cy - a, ccx + a, cy + a, 0, stroke); line(scene, ccx - a, cy + a, ccx + a, cy - a, 0, stroke);
-    const Rect tools{close.x - l.margin - l.button, l.margin, l.button, l.button};
-    control(tools, 15, "");
-    for (int i = -1; i <= 1; ++i) circle(scene, tools.x + tools.w / 2 + i * l.font / 2, cy, std::max(2, l.font / 12), 0, 0);
-    text(scene, {back.x + back.w + l.margin, l.margin, tools.x - back.x - back.w - 2 * l.margin, l.button}, l.font, "Библиотека");
+    screen_header(scene, width, l.margin, l.font, l.button, "Библиотека", Action::library_command);
+    const int a = l.font / 2, stroke = std::max(2, l.font / 12);
     const int info_y = l.margin + l.button;
-    text(scene, {l.margin, info_y, width - 2 * l.margin, l.font * 3 / 2}, l.font * 4 / 5,
+    text(scene, {l.margin, info_y, width - 3 * l.margin - l.button, std::max(40, l.font * 3 / 2)}, l.font * 4 / 5,
          "Найдено: " + std::to_string(model.matching) + " из " + std::to_string(model.total));
-    const int tabs_y = info_y + l.font * 3 / 2 + l.margin, tab_width = (width - 4 * l.margin) / 3;
+    const Rect tools{width - l.margin - l.button, info_y, l.button, std::max(40, l.font * 3 / 2)};
+    control(tools, 15, "");
+    for (int i = -1; i <= 1; ++i)
+        circle(scene, tools.x + tools.w / 2 + i * l.font / 2, tools.y + tools.h / 2, std::max(2, l.font / 12), 0, 0);
+    const int tabs_y = info_y + std::max(40, l.font * 3 / 2) + l.margin, tab_width = (width - 4 * l.margin) / 3;
     const char* tabs[] = {"Все", "Новые", "Просмотренные"};
     for (int i = 0; i < 3; ++i) control({l.margin + i * (tab_width + l.margin), tabs_y, tab_width, l.button}, 20 + i, tabs[i], true, model.status == i);
     const int search_y = tabs_y + l.button + l.margin, search_width = (width - 3 * l.margin) * 3 / 5;
