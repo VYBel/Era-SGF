@@ -3,12 +3,15 @@
 #include <cstddef>
 #include "erasgf/compat.hpp"
 #include <string>
+#include <functional>
 
 namespace erasgf {
 std::string read_file(const std::string& path, std::size_t max_bytes = 16 * 1024 * 1024);
 std::string fingerprint(const std::string& bytes);
 void make_directories(const std::string& path);
 void write_file_atomic(const std::string& path, const std::string& bytes);
+// Supplies bounded chunks; an empty chunk finishes the atomic write.
+void write_file_atomic_chunks(const std::string& path, const std::function<std::string()>& next);
 void record_diagnostic(const std::string& directory, const std::string& message) noexcept;
 struct AssociationResult { bool changed = false; std::string backup; };
 AssociationResult update_association(const std::string& config_path, bool install);

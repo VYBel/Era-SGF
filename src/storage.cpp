@@ -28,7 +28,7 @@ bool regular_or_absent(const std::string& path, struct stat& info) {
     if (!S_ISREG(info.st_mode)) throw std::runtime_error("Refusing to replace a symlink or non-regular file: " + path);
     return true;
 }
-void write_all(int fd, const std::string& text) {
+void write_all(int fd, const std::string& text, bool flush = true) {
     std::size_t offset = 0;
     while (offset < text.size()) {
         const auto n = ::write(fd, text.data() + offset, text.size() - offset);
@@ -36,9 +36,9 @@ void write_all(int fd, const std::string& text) {
         if (n <= 0) io_error("Write failed");
         offset += static_cast<std::size_t>(n);
     }
-    if (::fsync(fd) != 0) io_error("Cannot flush file");
+    if (flush && ::fsync(fd) != 0) io_error("Cannot flush file");
 }
-void atomic_write(const std::string& path, const std::string& text) {
+void atomic_write_chunks(const std::string& path, const std::function<std::string()>& next) {
     struct stat info{};
     const bool exists = regular_or_absent(path, info);
     std::string pattern = path + ".era-sgf-XXXXXX";
@@ -55,11 +55,16 @@ void atomic_write(const std::string& path, const std::string& text) {
             constexpr long fat_magic = 0x4d44;
             if (filesystem.f_type != fat_magic && ::fchmod(fd, info.st_mode & 0777) != 0) io_error("Cannot preserve file permissions");
         }
-        write_all(fd, text);
+        for (;;) { const auto chunk = next(); if (chunk.empty()) break; write_all(fd, chunk, false); }
+        if (::fsync(fd) != 0) io_error("Cannot flush file");
         if (::close(fd) != 0) { fd = -1; io_error("Cannot close file"); }
         fd = -1;
         if (::rename(temp.data(), path.c_str()) != 0) io_error("Cannot replace " + path);
     } catch (...) { if (fd >= 0) ::close(fd); ::unlink(temp.data()); throw; }
+}
+void atomic_write(const std::string& path, const std::string& text) {
+    bool done = false;
+    atomic_write_chunks(path, [&] { if (done) return std::string{}; done = true; return text; });
 }
 void ensure_directory(const std::string& path) {
     path_check(path);
@@ -170,6 +175,12 @@ void write_file_atomic(const std::string& path, const std::string& bytes) {
     const auto slash = path.find_last_of('/');
     if (slash != std::string::npos) ensure_directory(slash ? path.substr(0, slash) : "/");
     atomic_write(path, bytes);
+}
+void write_file_atomic_chunks(const std::string& path, const std::function<std::string()>& next) {
+    path_check(path);
+    const auto slash = path.find_last_of('/');
+    if (slash != std::string::npos) ensure_directory(slash ? path.substr(0, slash) : "/");
+    atomic_write_chunks(path, next);
 }
 void record_diagnostic(const std::string& directory, const std::string& message) noexcept {
     int fd = -1;

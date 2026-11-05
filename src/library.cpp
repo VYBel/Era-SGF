@@ -8,6 +8,9 @@
 #include <cstring>
 #include <dirent.h>
 #include <fcntl.h>
+#include <fstream>
+#include <chrono>
+#include <unordered_map>
 #include <map>
 #include <set>
 #include <sstream>
@@ -54,7 +57,19 @@ std::string fold(std::string text) {
     return out;
 }
 bool sgf(const std::string& name) { return name.size() > 4 && fold(name.substr(name.size() - 4)) == ".sgf"; }
-void scan(const std::string& root, const std::string& relative, std::set<std::string>& files, unsigned depth = 0) {
+struct Stamp { long long bytes, modified, changed, modified_ns, changed_ns; };
+Stamp stamp(const struct stat& info) {
+    return {static_cast<long long>(info.st_size), info.st_mtime, info.st_ctime, info.st_mtim.tv_nsec, info.st_ctim.tv_nsec};
+}
+void apply_stamp(LibraryRecord& record, const Stamp& value) {
+    record.modified = value.modified; record.changed = value.changed;
+    record.modified_ns = value.modified_ns; record.changed_ns = value.changed_ns;
+}
+bool same_stamp(const LibraryRecord& record, const Stamp& value) {
+    return record.changed && record.bytes == static_cast<std::size_t>(value.bytes) && record.modified == value.modified &&
+        record.changed == value.changed && record.modified_ns == value.modified_ns && record.changed_ns == value.changed_ns;
+}
+void scan(const std::string& root, const std::string& relative, std::map<std::string, Stamp>& files, unsigned depth = 0) {
     if (depth > 32) throw std::runtime_error("Too many nested SGF directories");
     struct stat info{}; const auto absolute = root + '/' + relative;
     if (::lstat(absolute.c_str(), &info) != 0) { if (errno == ENOENT) return; fail("Cannot inspect " + absolute); }
@@ -67,8 +82,7 @@ void scan(const std::string& root, const std::string& relative, std::set<std::st
             const auto path = relative + '/' + name;
             if (::lstat((root + '/' + path).c_str(), &info) != 0) fail("Cannot inspect " + path);
             if (S_ISDIR(info.st_mode)) scan(root, path, files, depth + 1);
-            else if (S_ISREG(info.st_mode) && sgf(name)) files.insert(path);
-            if (files.size() > 20000) throw std::runtime_error("The SGF library exceeds 20000 files");
+            else if (S_ISREG(info.st_mode) && sgf(name)) files.emplace(path, stamp(info));
         }
     } catch (...) { ::closedir(directory); throw; }
     ::closedir(directory);
@@ -92,10 +106,23 @@ void exclusive_copy(const std::string& target, const std::string& raw) {
 }
 
 std::string game_year(const std::string& date, const std::string& fallback) {
-    for (const auto* value : {&date, &fallback}) for (std::size_t i = 0; i + 4 <= value->size(); ++i) {
-        const auto candidate = value->substr(i, 4);
-        if ((i && (*value)[i - 1] >= '0' && (*value)[i - 1] <= '9') || (i + 4 < value->size() && (*value)[i + 4] >= '0' && (*value)[i + 4] <= '9')) continue;
-        if (candidate.find_first_not_of("0123456789") == std::string::npos && candidate >= "1800" && candidate <= "2199") return candidate;
+    auto year = [](const std::string& text, std::size_t i) {
+        const auto candidate = text.substr(i, 4);
+        if (candidate.size() == 4 && candidate.find_first_not_of("0123456789") == std::string::npos && candidate >= "1000" && candidate <= "2199" &&
+            (i + 4 == text.size() || text[i + 4] < '0' || text[i + 4] > '9')) return candidate;
+        return std::string{};
+    };
+    for (std::size_t i = 0; i + 4 <= date.size(); ++i) {
+        if (i && date[i - 1] >= '0' && date[i - 1] <= '9') continue;
+        const auto result = year(date, i); if (!result.empty()) return result;
+    }
+    // Only a year directory or a leading date in the basename is a fallback,
+    // never an arbitrary four-digit substring of a player's name or content hash.
+    std::istringstream parts(fallback); std::string part;
+    while (std::getline(parts, part, '/')) {
+        if (part.size() == 4 || (parts.eof() && part.size() > 4 && (part[4] == '-' || part[4] == '.' || part[4] == ' '))) {
+            const auto result = year(part, 0); if (!result.empty()) return result;
+        }
     }
     return "unknown";
 }
@@ -130,7 +157,8 @@ void Library::check_file(const std::string& relative_path) const {
 }
 std::size_t Library::index(const std::string& path) const {
     const auto normalized = relative(path);
-    for (std::size_t i = 0; i < records_.size(); ++i) if (records_[i].path == normalized) return i;
+    const auto found = by_path_.find(normalized);
+    if (found != by_path_.end()) return found->second;
     throw std::runtime_error("Game is absent from the catalogue; refresh the library");
 }
 const LibraryRecord* Library::find(const std::string& path) const {
@@ -138,7 +166,7 @@ const LibraryRecord* Library::find(const std::string& path) const {
 }
 LibraryRecord Library::describe(const std::string& path, const std::string& raw) const {
     LibraryRecord record; record.path = path; record.source = fingerprint(raw); record.bytes = raw.size();
-    struct stat info{}; if (::lstat((root_ + '/' + path).c_str(), &info) == 0) record.modified = info.st_mtime;
+    struct stat info{}; if (::lstat((root_ + '/' + path).c_str(), &info) == 0) apply_stamp(record, stamp(info));
     try {
         const auto collection = parse_sgf(raw); record.games = collection.games.size();
         const auto& game = collection.games[0]; const auto& node = game.nodes[0];
@@ -158,72 +186,173 @@ LibraryRecord Library::describe(const std::string& path, const std::string& raw)
     record.year = game_year(record.date, record.path);
     return record;
 }
+void Library::invalidate_query() { query_valid_ = false; query_result_.clear(); }
+void Library::rebuild_index() {
+    by_path_.clear(); by_path_.reserve(records_.size());
+    for (std::size_t i = 0; i < records_.size(); ++i) by_path_.emplace(records_[i].path, i);
+    invalidate_query();
+}
+std::string Library::encode(const LibraryRecord& r) const {
+    std::ostringstream out;
+    out << hex(r.path) << '\t' << r.source << '\t' << hex(r.black) << '\t' << hex(r.white) << '\t' << hex(r.date) << '\t' << hex(r.event) << '\t' << hex(r.year) << '\t' << hex(r.problem) << '\t' << r.viewed << '\t' << r.games << '\t' << r.bytes << '\t' << std::max(0LL, r.modified)
+        << '\t' << std::max(0LL, r.changed) << '\t' << r.modified_ns << '\t' << r.changed_ns;
+    return out.str();
+}
+LibraryRecord Library::decode(const std::string& line) const {
+    const auto f = split(line); if (f.size() != 12 && f.size() != 15) throw std::runtime_error("Invalid catalogue row");
+    LibraryRecord r; r.path = relative(unhex(f[0])); r.source = f[1];
+    if (r.source.size() != 16 || r.source.find_first_not_of("0123456789abcdef") != std::string::npos) throw std::runtime_error("Invalid catalogue identity");
+    r.black = unhex(f[2]); r.white = unhex(f[3]); r.date = unhex(f[4]); r.event = unhex(f[5]); r.year = unhex(f[6]); r.problem = unhex(f[7]);
+    // Recompute on migration: old catalogues excluded historical years.
+    r.year = game_year(r.date, r.path);
+    if (f[8] != "0" && f[8] != "1") throw std::runtime_error("Invalid viewed flag");
+    r.viewed = f[8] == "1"; r.games = number(f[9]); r.bytes = number(f[10]); r.modified = number(f[11]);
+    if (f.size() == 15) { r.changed = number(f[12]); r.modified_ns = number(f[13]); r.changed_ns = number(f[14]); }
+    if (r.games > 100000 || r.bytes > 16 * 1024 * 1024 + 1 || r.modified_ns >= 1000000000 || r.changed_ns >= 1000000000) throw std::runtime_error("Catalogue limits exceeded");
+    return r;
+}
 void Library::load() {
     try {
-        std::istringstream input(read_file(state_ + "/library.db", 32 * 1024 * 1024)); std::string line;
+        const auto path = state_ + "/library.db"; struct stat info{};
+        if (::lstat(path.c_str(), &info) != 0) return;
+        if (!S_ISREG(info.st_mode) || info.st_size > 256 * 1024 * 1024) throw std::runtime_error("Invalid catalogue file");
+        std::ifstream input(path); std::string line;
         if (!std::getline(input, line)) return;
-        const bool complete = line == "ERA-SGF-LIBRARY\t1\tcomplete";
-        if (!complete && line != "ERA-SGF-LIBRARY\t1\tpartial") return;
-        std::set<std::string> paths;
+        const auto header = split(line);
+        if (header.size() < 3 || header[0] != "ERA-SGF-LIBRARY" || (header[1] != "1" && header[1] != "2") || (header[2] != "complete" && header[2] != "partial")) return;
+        if (header[1] == "2") { if (header.size() != 4 || header[3].size() != 16) return; generation_ = header[3]; }
         while (std::getline(input, line)) {
-            const auto f = split(line); if (f.size() != 12) throw std::runtime_error("Invalid catalogue row");
-            LibraryRecord r; r.path = relative(unhex(f[0])); r.source = f[1];
-            if (!paths.insert(r.path).second || r.source.size() != 16 || r.source.find_first_not_of("0123456789abcdef") != std::string::npos) throw std::runtime_error("Invalid catalogue identity");
-            r.black = unhex(f[2]); r.white = unhex(f[3]); r.date = unhex(f[4]); r.event = unhex(f[5]); r.year = unhex(f[6]); r.problem = unhex(f[7]);
-            if (r.year != game_year(r.date, r.path)) throw std::runtime_error("Invalid catalogue year");
-            if (f[8] != "0" && f[8] != "1") throw std::runtime_error("Invalid viewed flag");
-            r.viewed = f[8] == "1"; r.games = number(f[9]); r.bytes = number(f[10]); r.modified = number(f[11]);
-            if (r.games > 100000 || r.bytes > 16 * 1024 * 1024 + 1 || records_.size() >= 20000) throw std::runtime_error("Catalogue limits exceeded");
+            if (input.eof()) throw std::runtime_error("Truncated catalogue row");
+            auto r = decode(line);
+            if (!by_path_.emplace(r.path, records_.size()).second) throw std::runtime_error("Duplicate catalogue path");
             records_.push_back(std::move(r));
         }
-        loaded_ = complete;
-    } catch (const std::exception&) { records_.clear(); loaded_ = false; }
+        if (input.bad()) throw std::runtime_error("Cannot read catalogue");
+        loaded_ = header[2] == "complete";
+    } catch (const std::exception&) { records_.clear(); by_path_.clear(); generation_.clear(); loaded_ = false; return; }
+    // An atomic, checksummed delta belongs to exactly one snapshot generation.
+    // A stale delta after successful snapshot replacement must never be replayed.
+    try {
+        struct stat info{}; const auto path = state_ + "/library.changes";
+        if (::lstat(path.c_str(), &info) != 0 || !S_ISREG(info.st_mode) || generation_.empty()) return;
+        const auto raw = read_file(path, 4 * 1024 * 1024); const auto newline = raw.find('\n');
+        if (newline == std::string::npos) throw std::runtime_error("Invalid change header");
+        const auto header = split(raw.substr(0, newline));
+        if (header.size() != 4 || header[0] != "ERA-SGF-CHANGES" || header[1] != "1") throw std::runtime_error("Invalid change header");
+        if (header[2] != generation_) return;
+        const auto body = raw.substr(newline + 1);
+        if (fingerprint(body) != header[3] || body.empty() || body.back() != '\n') throw std::runtime_error("Damaged catalogue changes");
+        std::vector<std::pair<std::string, LibraryRecord>> pending;
+        std::istringstream input(body); std::string line;
+        while (std::getline(input, line)) {
+            if (line.compare(0, 2, "U\t") == 0) pending.push_back({"", decode(line.substr(2))});
+            else if (line.compare(0, 2, "D\t") == 0) pending.push_back({relative(unhex(line.substr(2))), {}});
+            else throw std::runtime_error("Invalid catalogue change");
+        }
+        for (auto& change : pending) {
+            if (change.first.empty()) {
+                auto found = by_path_.find(change.second.path);
+                if (found == by_path_.end()) { by_path_[change.second.path] = records_.size(); records_.push_back(std::move(change.second)); }
+                else records_[found->second] = std::move(change.second);
+            } else {
+                auto found = by_path_.find(change.first);
+                if (found == by_path_.end()) continue;
+                const auto i = found->second; by_path_.erase(found);
+                if (i != records_.size() - 1) { records_[i] = std::move(records_.back()); by_path_[records_[i].path] = i; }
+                records_.pop_back();
+            }
+        }
+        changes_ = body; change_count_ = pending.size();
+    } catch (const std::exception& e) { record_diagnostic(state_, e.what()); }
 }
-void Library::save() const {
-    std::ostringstream out; out << "ERA-SGF-LIBRARY\t1\t" << (loaded_ ? "complete" : "partial") << '\n';
-    for (const auto& r : records_) out << hex(r.path) << '\t' << r.source << '\t' << hex(r.black) << '\t' << hex(r.white) << '\t' << hex(r.date) << '\t' << hex(r.event) << '\t' << hex(r.year) << '\t' << hex(r.problem) << '\t' << r.viewed << '\t' << r.games << '\t' << r.bytes << '\t' << std::max(0LL, r.modified) << '\n';
-    write_file_atomic(state_ + "/library.db", out.str());
+void Library::save() {
+    static unsigned serial = 0;
+    const auto generation = fingerprint(std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count()) + ':' + std::to_string(::getpid()) + ':' + std::to_string(++serial));
+    std::size_t i = 0, bytes = 0; bool header = false;
+    write_file_atomic_chunks(state_ + "/library.db", [&] {
+        std::string chunk;
+        if (!header) { chunk = std::string("ERA-SGF-LIBRARY\t2\t") + (loaded_ ? "complete" : "partial") + '\t' + generation + '\n'; header = true; }
+        while (i < records_.size() && chunk.size() < 65536) chunk += encode(records_[i++]) + '\n';
+        bytes += chunk.size(); if (bytes > 256 * 1024 * 1024) throw std::runtime_error("Catalogue exceeds 256 MiB");
+        return chunk;
+    });
+    generation_ = generation; changes_.clear(); change_count_ = 0;
 }
-void Library::refresh() {
-    std::set<std::string> paths;
+void Library::save_changes(const std::string& previous_path, const LibraryRecord* record) {
+    // Mutations have already been staged in memory; snapshot compaction therefore
+    // commits the same transaction as writing its small delta would.
+    if (generation_.empty() || change_count_ >= 512 || changes_.size() > 1024 * 1024) { save(); return; }
+    struct stat info{};
+    if (::lstat((state_ + "/library.db").c_str(), &info) != 0 || !S_ISREG(info.st_mode)) throw std::runtime_error("Catalogue snapshot is unavailable");
+    auto next = changes_; std::size_t count = 0;
+    if (!previous_path.empty()) { next += "D\t" + hex(previous_path) + '\n'; ++count; }
+    if (record) { next += "U\t" + encode(*record) + '\n'; ++count; }
+    if (next.size() > 1024 * 1024) { save(); return; }
+    write_file_atomic(state_ + "/library.changes", "ERA-SGF-CHANGES\t1\t" + generation_ + '\t' + fingerprint(next) + '\n' + next);
+    changes_ = std::move(next); change_count_ += count;
+}
+void Library::refresh(bool force) {
+    refresh_stats_ = {};
+    struct stat storage_info{};
+    if (::lstat(root_.c_str(), &storage_info) != 0 || !S_ISDIR(storage_info.st_mode)) throw std::runtime_error("Invalid reader storage root");
+    std::map<std::string, Stamp> paths;
     scan(root_, "sgf", paths); scan(root_, "Books/Era-SGF", paths);
     for (const auto& old : records_) {
-        try { check_file(old.path); paths.insert(old.path); } catch (const std::exception&) {}
+        if (paths.count(old.path)) continue;
+        try { check_file(old.path); struct stat info{}; if (::lstat((root_ + '/' + old.path).c_str(), &info) == 0) paths.emplace(old.path, stamp(info)); } catch (const std::exception&) {}
     }
-    std::vector<LibraryRecord> updated; std::set<std::string> reused;
-    for (const auto& path : paths) {
-        check_file(path); LibraryRecord record;
-        try { record = describe(path, read_file(root_ + '/' + path)); }
+    refresh_stats_.discovered = paths.size();
+    // The common unchanged case needs no second copy of every metadata record.
+    if (!force && loaded_ && !generation_.empty() && paths.size() == records_.size()) {
+        bool unchanged = true;
+        for (const auto& item : paths) { const auto* old = find(item.first); if (!old || !same_stamp(*old, item.second)) { unchanged = false; break; } }
+        if (unchanged) { refresh_stats_.reused = paths.size(); return; }
+    }
+    std::unordered_map<std::string, std::vector<std::size_t>> missing;
+    for (std::size_t i = 0; i < records_.size(); ++i) if (!paths.count(records_[i].path)) missing[records_[i].source].push_back(i);
+    std::vector<LibraryRecord> updated; updated.reserve(paths.size());
+    bool changed = !loaded_ || generation_.empty() || paths.size() != records_.size();
+    for (const auto& item : paths) {
+        const auto& path = item.first; const auto* old = find(path);
+        if (!force && old && same_stamp(*old, item.second)) { updated.push_back(*old); ++refresh_stats_.reused; continue; }
+        LibraryRecord record; ++refresh_stats_.parsed; changed = true;
+        try { check_file(path); record = describe(path, read_file(root_ + '/' + path)); }
         catch (const std::exception& e) {
-            // A bad or unreadable record must not hide all the other games.
-            struct stat info{}; ::lstat((root_ + '/' + path).c_str(), &info);
             record.path = path; record.year = game_year("", path); record.problem = e.what();
-            record.bytes = static_cast<std::size_t>(std::max<off_t>(0, std::min<off_t>(info.st_size, 16 * 1024 * 1024 + 1)));
-            record.modified = info.st_mtime;
-            record.source = fingerprint("unreadable:" + std::to_string(info.st_size) + ':' + std::to_string(info.st_mtime));
+            record.bytes = static_cast<std::size_t>(std::max(0LL, std::min(item.second.bytes, 16LL * 1024 * 1024 + 1)));
+            record.source = fingerprint("unreadable:" + std::to_string(item.second.bytes) + ':' + std::to_string(item.second.modified));
         }
-        const auto* old = find(path);
+        apply_stamp(record, item.second);
         if (old && old->source == record.source) record.viewed = old->viewed;
-        else if (!old) for (const auto& missing : records_) {
-            if (!paths.count(missing.path) && !reused.count(missing.path) && missing.source == record.source) {
-                record.viewed = missing.viewed; reused.insert(missing.path); break;
-            }
+        else if (!old) {
+            auto found = missing.find(record.source);
+            if (found != missing.end() && !found->second.empty()) { record.viewed = records_[found->second.back()].viewed; found->second.pop_back(); }
         }
         updated.push_back(std::move(record));
     }
+    if (!changed) return;
     records_.swap(updated); const bool was_loaded = loaded_; loaded_ = true;
     try { save(); } catch (...) { records_.swap(updated); loaded_ = was_loaded; throw; }
+    rebuild_index();
 }
 void Library::track(const std::string& path, const std::string& raw) {
     const auto normalized = relative(path); check_file(normalized);
+    // Opening an unchanged game must not parse it again just for the catalogue.
+    const auto* old = find(normalized);
+    if (old && old->source == fingerprint(raw)) return;
     auto record = describe(normalized, raw);
-    if (const auto* old = find(normalized)) {
-        if (old->source == record.source) return;
-        records_[index(normalized)] = std::move(record);
-    } else records_.push_back(std::move(record));
-    save();
+    if (old) {
+        const auto i = index(normalized); const auto before = records_[i]; records_[i] = std::move(record);
+        try { save_changes("", &records_[i]); } catch (...) { records_[i] = before; throw; }
+    } else {
+        records_.push_back(std::move(record));
+        try { save_changes("", &records_.back()); } catch (...) { records_.pop_back(); throw; }
+        by_path_[normalized] = records_.size() - 1;
+    }
+    invalidate_query();
 }
 std::vector<std::size_t> Library::query(const LibraryFilter& filter) const {
+    if (query_valid_ && query_filter_.status == filter.status && query_filter_.year == filter.year && query_filter_.query == filter.query) return query_result_;
     std::vector<std::size_t> result; const auto needle = fold(filter.query);
     for (std::size_t i = 0; i < records_.size(); ++i) {
         const auto& r = records_[i];
@@ -237,6 +366,7 @@ std::vector<std::size_t> Library::query(const LibraryFilter& filter) const {
         const auto& left = records_[a]; const auto& right = records_[b];
         return left.date != right.date ? left.date > right.date : left.path < right.path;
     });
+    query_filter_ = filter; query_result_ = result; query_valid_ = true;
     return result;
 }
 std::vector<std::string> Library::years() const {
@@ -261,7 +391,8 @@ std::string Library::verified(std::size_t i) const {
 void Library::set_viewed(const std::string& path, bool value) {
     const auto i = index(path); if (records_[i].viewed == value) return;
     verified(i); records_[i].viewed = value;
-    try { save(); } catch (...) { records_[i].viewed = !value; throw; }
+    try { save_changes("", &records_[i]); } catch (...) { records_[i].viewed = !value; throw; }
+    invalidate_query();
 }
 std::string Library::move_to_viewed(const std::string& path) {
     const auto i = index(path); const auto before = records_[i]; const auto raw = verified(i);
@@ -283,30 +414,36 @@ std::string Library::move_to_viewed(const std::string& path) {
     const auto resume = load_state(state_, old_absolute, raw);
     try {
         if (resume) { auto moved = *resume; moved.path = new_absolute; save_state(state_, moved); }
-        records_[i].path = destination; records_[i].viewed = true; save();
+        records_[i].path = destination; records_[i].viewed = true; save_changes(before.path, &records_[i]);
         verified(i);
         check_file(before.path);
         if (fingerprint(read_file(old_absolute)) != before.source) throw std::runtime_error("Source changed while moving");
         if (::unlink(old_absolute.c_str()) != 0) fail("Cannot remove old SGF after moving");
     } catch (...) {
         records_[i] = before;
-        try { save(); } catch (...) {}
+        try { save_changes(destination, &records_[i]); } catch (...) {}
         bool restored = !resume;
         try { if (resume) save_state(state_, *resume); restored = true; } catch (...) {}
         // If the resume rollback also fails, retain the copy its last pointer uses.
         if (restored) ::unlink(new_absolute.c_str());
         throw;
     }
+    by_path_.erase(before.path); by_path_[destination] = i; invalidate_query();
     return destination;
 }
 void Library::erase(const std::string& path) {
-    const auto i = index(path); verified(i); const auto before = records_;
+    const auto i = index(path); verified(i); const auto before = records_[i];
     records_.erase(records_.begin() + static_cast<std::ptrdiff_t>(i));
     try {
-        save();
-        check_file(before[i].path);
-        if (fingerprint(read_file(root_ + '/' + before[i].path)) != before[i].source) throw std::runtime_error("Source changed while deleting");
-        if (::unlink((root_ + '/' + before[i].path).c_str()) != 0) fail("Cannot delete selected SGF");
-    } catch (...) { records_ = before; try { save(); } catch (...) {} throw; }
+        save_changes(before.path, nullptr);
+        check_file(before.path);
+        if (fingerprint(read_file(root_ + '/' + before.path)) != before.source) throw std::runtime_error("Source changed while deleting");
+        if (::unlink((root_ + '/' + before.path).c_str()) != 0) fail("Cannot delete selected SGF");
+    } catch (...) {
+        records_.insert(records_.begin() + static_cast<std::ptrdiff_t>(i), before);
+        try { save_changes("", &records_[i]); } catch (...) {}
+        throw;
+    }
+    rebuild_index();
 }
 } // namespace erasgf

@@ -329,7 +329,7 @@ class DeviceAdapter(unittest.TestCase):
 
     def test_launch_shows_version_then_dismisses_once_without_idle_timers(self):
         trace = self.run_ui('wait:1500;wait:60000;close', self.record, wait_startup=False)
-        self.assertIn('Версия 1.1.1', trace)
+        self.assertIn('Версия ' + Path('VERSION').read_text().strip(), trace)
         self.assertEqual(trace.splitlines().count('FRAME'), 2)
         self.assertIn('TIMERS_ACTIVE 0', trace)
         trace = self.run_ui('hide;wait:60000;close', self.record, wait_startup=False)

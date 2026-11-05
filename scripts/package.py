@@ -46,6 +46,13 @@ Installation / Установка:
    If SGF is not visible, use Era-SGF's own Open SGF menu and report the model/firmware.
 
 Library / Библиотека:
+Before upgrading, back up system/config/era-sgf. Version 1.2.0 migrates the catalogue
+with viewed flags; a downgrade to 1.1.1 requires restoring that earlier state too.
+Перед обновлением сохрани system/config/era-sgf. Для отката на 1.1.1 восстанови
+прежнее состояние вместе с приложением: старая версия не читает новый каталог.
+The 20,000-file cap is removed; the library was host-tested with 117,245 SGFs.
+Refresh reuses unchanged records. Use «Перепроверить все файлы» for a forced rescan,
+including edits which preserve file size and timestamps.
 Put your games under sgf/ (subfolders, including years, are supported). Choose Menu → Библиотека
 партий for persistent all/new/viewed filters, year selection and search. Refresh the library
 after copying new records. Reaching a leaf during navigation marks a file viewed; opening it

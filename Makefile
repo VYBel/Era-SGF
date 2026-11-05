@@ -65,3 +65,6 @@ emulator:
 
 clean:
 	rm -rf $(BUILD)
+
+$(BUILD)/era-sgf-library-benchmark: tools/library_benchmark.cpp $(CORE) $(HEADERS) $(DATA) | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -DERASGF_BENCH_STATS tools/library_benchmark.cpp $(CORE) $(LDFLAGS) -o $@

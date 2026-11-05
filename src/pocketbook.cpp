@@ -136,7 +136,8 @@ public:
                 if (index == 112) { const int rotation[] = {1, 3, 0, 2}; SetOrientation(rotation[GetOrientation() & 3]); }
                 if (index == 113) { finish(true); return; }
                 if (index == 114) { show_library(); return; }
-                if (index == 13) { library.refresh(); show_library(); return; }
+                if (index == 13) { library.refresh(); library_scanned = true; show_library(); return; }
+                if (index == 16) { library.refresh(true); library_scanned = true; show_library(); return; }
                 if (index == 14) { library_filter = LibraryFilter{}; library_page = 0; show_library(); return; }
                 if (index == 115) { toggle_autoplay(); draw(); return; }
                 if (index == 116) { show_pauses(); return; }
@@ -257,7 +258,7 @@ private:
     std::string file, source_id, manual = "auto", encoding_error, directory;
     EncodingChoice encoding{"UTF-8", false, ""};
     bool full_comment = false, information = false, about = false, dirty = false;
-    bool library_visible = false, files_from_library = false;
+    bool library_visible = false, files_from_library = false, library_scanned = false;
     std::size_t library_page = 0;
     std::size_t comment_page = 0;
     unsigned refreshes = 0;
@@ -681,7 +682,7 @@ private:
     }
     void open_random() {
         stop_autoplay();
-        library.refresh();
+        if (!library_scanned) { library.refresh(); library_scanned = true; }
         std::random_device seed;
         std::mt19937 random(seed());
         const auto path = library.random_unviewed(random);
@@ -697,11 +698,11 @@ private:
         open_file(root + '/' + path); draw(true);
     }
     void show_library_tools() {
-        show(Menu::library_tools, "Библиотека", {{13, "Обновить список партий"}, {100, "Открыть SGF из папки…"}, {14, "Сбросить поиск и фильтры"}});
+        show(Menu::library_tools, "Библиотека", {{13, "Обновить список партий"}, {16, "Перепроверить все файлы"}, {100, "Открыть SGF из папки…"}, {14, "Сбросить поиск и фильтры"}});
     }
     void show_library() {
         stop_autoplay();
-        if (!library.loaded()) library.refresh();
+        if (!library_scanned) { library.refresh(); library_scanned = true; }
         library_rows = library.query(library_filter);
         const auto capacity = library_page_capacity(ScreenWidth(), ScreenHeight());
         const auto pages = std::max<std::size_t>(1, (library_rows.size() + capacity - 1) / capacity);

@@ -1,13 +1,19 @@
 # Установка / Installation
 
-## Готовая сборка 1.1.1
+## Готовая сборка 1.2.0
+
+Перед обновлением скопируй всю папку `system/config/era-sgf` с книги на компьютер.
+Версия 1.2.0 переносит каталог v1 в v2 с сохранением отметок просмотра. Для отката
+на 1.1.1 понадобится прежняя папка состояния вместе с прежним приложением:
+старая версия не читает каталог v2. Резервная копия файлов установщика не заменяет
+эту копию пользовательского состояния.
 
 Платформа: PocketBook OS / Linux, B288, ARMv7 soft-float, SDK 6.8 (прошивки 6.8+).
 Основная модель — Era 700. Совместимость с другими моделями и интеграция формата
 в штатную библиотеку проверяются отдельно; см. [отчёт](validation.md).
 
-Со [страницы релиза v1.1.1](https://github.com/VYBel/Era-SGF/releases/tag/v1.1.1)
-скачай `Era-SGF-1.1.1-b288.zip`. Архив уже содержит скомпилированное приложение.
+Со [страницы релиза v1.2.0](https://github.com/VYBel/Era-SGF/releases/tag/v1.2.0)
+скачай `Era-SGF-1.2.0-b288.zip`. Архив уже содержит скомпилированное приложение.
 SDK, компилятор и Python на самой книге не нужны.
 
 ### Обычная установка — любой компьютер
@@ -30,13 +36,13 @@ Python 3.9+ **на компьютере**. Сохрани скрипт и ZIP в
 открой в ней терминал. В командах замени `/path/to/PocketBook` на точку монтирования книги:
 
 ```sh
-python3 install-mounted-reader.py --root /path/to/PocketBook --archive Era-SGF-1.1.1-b288.zip --backup-dir ./era-sgf-backups
+python3 install-mounted-reader.py --root /path/to/PocketBook --archive Era-SGF-1.2.0-b288.zip --backup-dir ./era-sgf-backups
 ```
 
 Первая команда только показывает план. Для установки:
 
 ```sh
-python3 install-mounted-reader.py --root /path/to/PocketBook --archive Era-SGF-1.1.1-b288.zip --backup-dir ./era-sgf-backups --apply
+python3 install-mounted-reader.py --root /path/to/PocketBook --archive Era-SGF-1.2.0-b288.zip --backup-dir ./era-sgf-backups --apply
 ```
 
 Установщик сохраняет заменяемые файлы в `era-sgf-backups/` **на компьютере**,

@@ -6,6 +6,7 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <sstream>
 #include <stdexcept>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -136,6 +137,9 @@ int main() {
         Library library(f.root, f.state); library.refresh(); CHECK(library.records().size() == 2);
         throws([&] { library.track(f.root + "/sgf/link.sgf", "(;SZ[9])"); });
         throws([&] { library.erase("../outside.sgf"); });
+        CHECK(::symlink(f.root.c_str(), (f.root + "/root-alias").c_str()) == 0);
+        Library aliased(f.root + "/root-alias", f.state);
+        throws([&] { aliased.refresh(); });
         throws([&] { library.move_to_viewed("/tmp/outside.sgf"); });
         CHECK(::unlink((f.root + "/sgf/1969/first.sgf").c_str()) == 0);
         CHECK(::symlink((f.root + "/sgf/2001/second.sgf").c_str(), (f.root + "/sgf/1969/first.sgf").c_str()) == 0);
@@ -172,6 +176,89 @@ int main() {
         CHECK(!library.find("sgf/oversized.sgf")->problem.empty());
         CHECK(library.find("sgf/1969/first.sgf")->problem.empty());
         Library reopened(f.root, f.state); CHECK(reopened.loaded()); CHECK(reopened.records().size() == 3);
+    });
+    test("incremental refresh reuses unchanged files and forced refresh reparses them", [] {
+        Fixture f; Library library(f.root, f.state); library.refresh();
+        CHECK(library.refresh_stats().parsed == 2);
+        library.set_viewed("sgf/1969/first.sgf", true);
+        const auto snapshot = read_file(f.state + "/library.db");
+        library.refresh(); CHECK(library.refresh_stats().parsed == 0); CHECK(library.refresh_stats().reused == 2);
+        CHECK(read_file(f.state + "/library.db") == snapshot);
+        f.write("sgf/new.sgf", "(;SZ[9]PB[A]PW[B])");
+        library.refresh(); CHECK(library.refresh_stats().parsed == 1); CHECK(library.refresh_stats().reused == 2);
+        library.refresh(true); CHECK(library.refresh_stats().parsed == 3);
+        CHECK(library.find("sgf/1969/first.sgf")->viewed);
+    });
+    test("viewed changes leave snapshot untouched and cached queries follow mutations", [] {
+        Fixture f; Library library(f.root, f.state); library.refresh();
+        const auto snapshot = read_file(f.state + "/library.db");
+        LibraryFilter filter; filter.status = ReadFilter::new_only;
+        CHECK(library.query(filter).size() == 2);
+        library.set_viewed("sgf/1969/first.sgf", true);
+        CHECK(read_file(f.state + "/library.db") == snapshot);
+        CHECK(library.query(filter).size() == 1);
+        Library reopened(f.root, f.state); CHECK(reopened.loaded());
+        CHECK(reopened.find("sgf/1969/first.sgf")->viewed);
+        reopened.set_viewed("sgf/1969/first.sgf", false);
+        Library again(f.root, f.state); CHECK(!again.find("sgf/1969/first.sgf")->viewed);
+    });
+    test("failed small change write rolls back memory and leaves snapshot readable", [] {
+        Fixture f; Library library(f.root, f.state); library.refresh();
+        CHECK(::mkdir((f.state + "/library.changes").c_str(), 0700) == 0);
+        throws([&] { library.set_viewed("sgf/1969/first.sgf", true); });
+        CHECK(!library.find("sgf/1969/first.sgf")->viewed);
+        Library reopened(f.root, f.state); CHECK(reopened.loaded());
+        CHECK(!reopened.find("sgf/1969/first.sgf")->viewed);
+    });
+    test("large metadata survives snapshots and oversized delta compaction", [] {
+        Fixture f; Library library(f.root, f.state); library.refresh();
+        const std::string raw = "(;SZ[19]PB[" + std::string(600000, 'A') + "]PW[B])";
+        f.write("sgf/long.sgf", raw); library.track("sgf/long.sgf", raw);
+        Library reopened(f.root, f.state); CHECK(reopened.loaded()); CHECK(reopened.records().size() == 3);
+        CHECK(reopened.find("sgf/long.sgf")->black.size() == 600000);
+        reopened.set_viewed("sgf/long.sgf", true);
+        Library again(f.root, f.state); CHECK(again.find("sgf/long.sgf")->viewed);
+    });
+    test("stale journal cannot undo compacted status and a damaged batch keeps the snapshot", [] {
+        Fixture f; Library library(f.root, f.state); library.refresh();
+        library.set_viewed("sgf/1969/first.sgf", true);
+        const auto stale = read_file(f.state + "/library.changes");
+        library.set_viewed("sgf/1969/first.sgf", false); library.refresh(true);
+        f.write("system/config/era-sgf/library.changes", stale);
+        Library reopened(f.root, f.state); CHECK(reopened.loaded()); CHECK(!reopened.find("sgf/1969/first.sgf")->viewed);
+        reopened.set_viewed("sgf/1969/first.sgf", true);
+        auto damaged = read_file(f.state + "/library.changes"); damaged.pop_back();
+        f.write("system/config/era-sgf/library.changes", damaged);
+        Library again(f.root, f.state); CHECK(again.loaded()); CHECK(again.records().size() == 2);
+        CHECK(!again.find("sgf/1969/first.sgf")->viewed);
+    });
+    test("v1 catalogue migration preserves viewed state and historical years", [] {
+        Fixture f; Library library(f.root, f.state); library.refresh();
+        library.set_viewed("sgf/1969/first.sgf", true); library.refresh(true);
+        const auto snapshot = read_file(f.state + "/library.db");
+        std::istringstream in(snapshot); std::string line, legacy = "ERA-SGF-LIBRARY\t1\tcomplete\n"; std::getline(in, line);
+        while (std::getline(in, line)) {
+            std::size_t at = 0; for (int i = 0; i < 12; ++i) at = line.find('\t', at) + 1;
+            legacy += line.substr(0, at - 1) + '\n';
+        }
+        f.write("system/config/era-sgf/library.db", legacy);
+        Library migrated(f.root, f.state); CHECK(migrated.loaded()); CHECK(migrated.find("sgf/1969/first.sgf")->viewed);
+        migrated.refresh(); CHECK(migrated.refresh_stats().parsed == 2);
+        Library again(f.root, f.state); CHECK(again.find("sgf/1969/first.sgf")->viewed);
+        CHECK(game_year("1054", "sgf/hash-1980.sgf") == "1054");
+        CHECK(game_year("", "sgf/1650/00/001/Без даты -- aa1980ab.sgf") == "1650");
+        CHECK(game_year("", "sgf/Без-даты/Без даты -- aa1980ab.sgf") == "unknown");
+    });
+    test("catalogues above twenty thousand records load and query", [] {
+        Fixture f; Library library(f.root, f.state); library.refresh();
+        auto snapshot = read_file(f.state + "/library.db"); const auto end = snapshot.find('\n');
+        const auto row = snapshot.substr(end + 1, snapshot.find('\n', end + 1) - end - 1);
+        std::string many = snapshot.substr(0, end + 1); const auto rest = row.substr(row.find('\t'));
+        auto hex = [](const std::string& value) { std::string out; const char* digits = "0123456789abcdef"; for (unsigned char c : value) { out += digits[c >> 4]; out += digits[c & 15]; } return out; };
+        for (int i = 0; i < 25001; ++i) many += hex("sgf/" + std::to_string(i) + ".sgf") + rest + '\n';
+        f.write("system/config/era-sgf/library.db", many);
+        Library reopened(f.root, f.state); CHECK(reopened.loaded()); CHECK(reopened.records().size() == 25001);
+        CHECK(reopened.query({}).size() == 25001); CHECK(reopened.find("sgf/25000.sgf"));
     });
     std::cout << (total - failed) << '/' << total << " library tests passed\n";
     return failed ? 1 : 0;
