@@ -20,6 +20,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <cerrno>
+#include <chrono>
+#include <sys/resource.h>
 
 using namespace erasgf;
 namespace {
@@ -44,34 +46,39 @@ void startup_callback();
 class Application {
 public:
     std::string root, state_dir, launch_file, launch_action;
-    explicit Application(std::string storage) : root(std::move(storage)), state_dir(root + "/system/config/era-sgf"), library(root, state_dir), directory(root) {}
+    explicit Application(std::string storage) : root(std::move(storage)), state_dir(root + "/system/config/era-sgf"), library(root, state_dir, true), directory(root) {}
     ~Application() { for (auto& font : fonts) CloseFont(font.second); }
 
     int event(int type, int p1, int p2) {
         try {
             if (type == EVT_INIT) {
                 load_preferences();
-                splash_visible = launch_action.empty();
+                splash_visible = launch_action.empty() && launch_file.empty();
                 SetPanelType(0);
-                if (!launch_file.empty()) open_file(launch_file);
-                else if (launch_action.empty()) { if (auto last = load_last_file(state_dir)) open_file(*last); }
                 if (!launch_action.empty()) association(launch_action == "--install");
+                else if (!launch_file.empty()) open_file(launch_file);
+                else if (auto last = load_last_file(state_dir)) open_file(*last);
+                record_diagnostic(state_dir, std::string("viewer ") + version + " open_ms=" + std::to_string(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startup_began).count()) + " catalogue=deferred");
             } else if (type == EVT_SHOW || type == EVT_FOREGROUND) {
                 resume_autoplay();
                 if (splash_visible) show_splash(); else if (library_visible) show_library(); else if (menu_visible) draw_menu(); else draw(true);
             }
             else if (type == EVT_EXIT) finish(false);
-            else if (type == EVT_HIDE || type == EVT_BACKGROUND) { suspend_autoplay(); ClearTimer(startup_callback); splash_visible = false; persist(); }
-            else if (type == EVT_ORIENTATION) { stop_autoplay(); ClearTimer(startup_callback); splash_visible = false; SetOrientation(p1); if (library_visible) show_library(); else if (menu_visible) draw_menu(); else draw(true); }
+            else if (type == EVT_HIDE || type == EVT_BACKGROUND) { suspend_autoplay(); ClearTimer(startup_callback); persist(); }
+            else if (type == EVT_ORIENTATION) { stop_autoplay(); SetOrientation(p1); if (splash_visible) show_splash(); else if (library_visible) show_library(); else if (menu_visible) draw_menu(); else draw(true); }
             else if (type == EVT_POINTERUP) {
-                if (splash_visible) { finish_startup(); return 0; }
+                if (splash_visible) {
+                    for (const auto& control : scene.controls) if (control.value == 901 && control.bounds.contains(p1, p2)) { cancel_loading(); break; }
+                    return 0;
+                }
                 for (const auto& control : scene.controls) if (control.bounds.contains(p1, p2)) {
                     const auto action = control.action; const int value = control.value;
                     if (action == Action::library_command || action == Action::menu_command) select(value); else act(action);
                     break;
                 }
             } else if (type == EVT_KEYPRESS || type == EVT_KEYREPEAT) {
-                if (splash_visible) { finish_startup(); return 0; }
+                if (splash_visible) { if (p1 == IV_KEY_BACK) cancel_loading(); return 0; }
                 if (menu_visible) {
                     if (p1 == IV_KEY_BACK) menu_back();
                     else if (p1 == IV_KEY_MENU) show_main();
@@ -136,8 +143,7 @@ public:
                 if (index == 112) { const int rotation[] = {1, 3, 0, 2}; SetOrientation(rotation[GetOrientation() & 3]); }
                 if (index == 113) { finish(true); return; }
                 if (index == 114) { show_library(); return; }
-                if (index == 13) { library.refresh(); library_scanned = true; show_library(); return; }
-                if (index == 16) { library.refresh(true); library_scanned = true; show_library(); return; }
+                if (index == 13 || index == 16) { refresh_library(index); return; }
                 if (index == 14) { library_filter = LibraryFilter{}; library_page = 0; show_library(); return; }
                 if (index == 115) { toggle_autoplay(); draw(); return; }
                 if (index == 116) { show_pauses(); return; }
@@ -247,18 +253,47 @@ public:
         } catch (const std::exception& e) { stop_autoplay(); draw(true); error(e.what()); ForcingSleep(); }
     }
     void finish_startup() {
-        if (!splash_visible) return;
-        ClearTimer(startup_callback); splash_visible = false; scene = Scene{};
-        draw(true); ForcingSleep();
+        ClearTimer(startup_callback);
+        if (!splash_visible || suspended || closing) return;
+        if (!catalogue_action) { splash_visible = false; scene = Scene{}; draw(true); idle(); return; }
+        try {
+            const auto began = std::chrono::steady_clock::now();
+            const bool ready = library.load_step(4096);
+            const auto now = std::chrono::steady_clock::now();
+            startup_max_step_ms = std::max(startup_max_step_ms, std::chrono::duration_cast<std::chrono::milliseconds>(now - began).count());
+            if (!ready) {
+                if (now - startup_painted >= std::chrono::seconds(1)) show_splash(false);
+                SetHardTimer("era-sgf-startup", startup_callback, 1);
+                return;
+            }
+            if (!library.load_error().empty()) throw std::runtime_error(library.load_error());
+            struct rusage usage{}; ::getrusage(RUSAGE_SELF, &usage);
+            record_diagnostic(state_dir, std::string("catalogue ") + version + " load_ms=" + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(now - startup_began).count())
+                + " rows=" + std::to_string(library.records().size()) + " peak_rss_kib=" + std::to_string(usage.ru_maxrss) + " max_step_ms=" + std::to_string(startup_max_step_ms));
+            splash_visible = false;
+            const int action = catalogue_action; catalogue_action = 0;
+            if (action == 13 || action == 16) refresh_library(action);
+            else if (action == 122 || action == 123) request_file_action(action);
+            else show_library();
+            idle();
+        } catch (const std::exception& e) {
+            catalogue_action = 0; splash_visible = false; draw(true);
+            error(std::string("Не удалось загрузить каталог. Просмотр SGF доступен, каталог не заменён.\n") + e.what());
+            idle();
+        }
     }
+    void idle() { if (!autoplay || suspended) ForcingSleep(); }
 
 private:
     Library library;
+    std::chrono::steady_clock::time_point startup_began = std::chrono::steady_clock::now(), startup_painted = startup_began;
+    std::chrono::milliseconds::rep startup_max_step_ms = 0;
+    int catalogue_action = 0;
     std::unique_ptr<Viewer> viewer;
     std::string file, source_id, manual = "auto", encoding_error, directory;
     EncodingChoice encoding{"UTF-8", false, ""};
     bool full_comment = false, information = false, about = false, dirty = false;
-    bool library_visible = false, files_from_library = false, library_scanned = false;
+    bool library_visible = false, files_from_library = false;
     std::size_t library_page = 0;
     std::size_t comment_page = 0;
     unsigned refreshes = 0;
@@ -291,6 +326,21 @@ private:
     void error(const std::string& message) {
         stop_autoplay(); record_diagnostic(state_dir, message);
         Message(ICON_ERROR, "Era-SGF", message.c_str(), 6000);
+    }
+    bool ensure_catalogue(int action) {
+        if (library.ready()) return true;
+        stop_autoplay(); catalogue_action = action; splash_visible = true;
+        startup_began = std::chrono::steady_clock::now(); startup_max_step_ms = 0;
+        show_splash(); return false;
+    }
+    void cancel_loading() {
+        if (!catalogue_action) { finish(true); return; }
+        ClearTimer(startup_callback); catalogue_action = 0; splash_visible = false;
+        draw(true); idle();
+    }
+    void refresh_library(int action) {
+        if (!ensure_catalogue(action)) return;
+        library.refresh(action == 16); show_library();
     }
     void finish(bool requested) {
         stop_autoplay(); ClearTimer(startup_callback); splash_visible = false;
@@ -348,10 +398,20 @@ private:
         for (std::size_t i = 0; i < logo_names().size(); ++i) options.push_back({400 + static_cast<int>(i), std::to_string(i + 1) + ". " + logo_names()[i] + (logo_choice == static_cast<int>(i + 1) ? " ✓" : "")});
         show(Menu::logos, "Логотип при запуске", options);
     }
-    void show_splash() {
+    void show_splash(bool full = true) {
         stop_autoplay(); scene = launch_scene(logo_choice, version, ScreenWidth(), ScreenHeight());
-        paint(scene); FullUpdate(); refreshes = 0;
-        SetHardTimer("era-sgf-startup", startup_callback, 1500);
+        const int width = ScreenWidth(), height = ScreenHeight();
+        const Rect close{width - 100, 0, 100, 100};
+        scene.drawing.push_back({DrawKind::line, {width - 64, 34, 28, 28}, 0, -1, 16, "", false, 3});
+        scene.drawing.push_back({DrawKind::line, {width - 64, 62, 28, -28}, 0, -1, 16, "", false, 3});
+        scene.controls.push_back({close, Action::menu_command, 901});
+        if (catalogue_action) scene.drawing.push_back({DrawKind::text, {0, height * 3 / 4, width, 60}, 0, -1, 28,
+            "Загрузка каталога · " + std::to_string(library.load_percent()) + "%", true});
+        paint(scene);
+        if (full) { FullUpdate(); refreshes = 0; }
+        else PartialUpdate(0, height * 3 / 4, width, 60);
+        startup_painted = std::chrono::steady_clock::now();
+        if (!suspended) SetHardTimer("era-sgf-startup", startup_callback, catalogue_action ? 1 : 1500);
     }
     void block_idle(bool block) {
         if (idle_blocked == block) return;
@@ -427,7 +487,7 @@ private:
     }
     void changed() {
         dirty = true; comment_page = 0;
-        if (viewer && viewer->node_index() != 0 && viewer->node().children.empty() && library.find(file)) library.set_viewed(file, true);
+        if (viewer && viewer->node_index() != 0 && viewer->node().children.empty()) library.set_viewed(file, true);
     }
     std::string decode(const std::string& value) const {
         if (!encoding_error.empty()) return {};
@@ -667,8 +727,11 @@ private:
     }
     void show_file_actions() {
         std::vector<std::pair<int, std::string>> options{{100, "Открыть SGF"}};
-        if (const auto* record = library.find(file)) {
-            options.push_back({record->viewed ? 121 : 120, record->viewed ? "Отметить новой" : "Отметить просмотренной"});
+        if (viewer) {
+            const auto* record = library.ready() ? library.find(file) : nullptr;
+            const int viewed = record ? static_cast<int>(record->viewed) : library.pending_viewed(file);
+            if (viewed != 1) options.push_back({120, "Отметить просмотренной"});
+            if (viewed != 0) options.push_back({121, "Отметить новой"});
             options.push_back({122, "Перенести в viewed"});
             options.push_back({123, "Удалить файл с книги"});
         }
@@ -682,27 +745,31 @@ private:
     }
     void open_random() {
         stop_autoplay();
-        if (!library_scanned) { library.refresh(); library_scanned = true; }
         std::random_device seed;
         std::mt19937 random(seed());
-        const auto path = library.random_unviewed(random);
-        if (path.empty()) {
-            LibraryFilter unread; unread.status = ReadFilter::new_only;
-            const auto message = library.records().empty() ? "В библиотеке пока нет партий. Добавь SGF в папку sgf и обнови список."
-                : library.query(unread).empty() ? "Все партии уже просмотрены."
-                : "Непросмотренные файлы есть, но их не удалось прочитать. Проверь SGF в библиотеке.";
+        const auto began = std::chrono::steady_clock::now();
+        const auto selection = library.random_game(random);
+        record_diagnostic(state_dir, std::string("random ") + version + " select_ms=" + std::to_string(
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - began).count())
+            + " rows=" + std::to_string(selection.total) + " attempts=" + std::to_string(selection.attempts)
+            + " limited=" + std::to_string(selection.search_limited));
+        if (selection.path.empty()) {
+            const auto message = selection.total == 0 ? "В библиотеке пока нет партий. Добавь SGF в папку sgf и обнови список."
+                : selection.unviewed == 0 ? "Все партии уже просмотрены."
+                : selection.search_limited ? "Поиск остановлен: доступная непросмотренная партия не найдена. Обнови список партий в инструментах библиотеки."
+                : "Непросмотренные файлы есть, но их не удалось прочитать. Обнови список партий в инструментах библиотеки.";
             if (library_visible) show_library(); else draw(true);
             Message(ICON_INFORMATION, "Случайная партия", message, 4000);
             return;
         }
-        open_file(root + '/' + path); draw(true);
+        open_file(root + '/' + selection.path); draw(true);
     }
     void show_library_tools() {
         show(Menu::library_tools, "Библиотека", {{13, "Обновить список партий"}, {16, "Перепроверить все файлы"}, {100, "Открыть SGF из папки…"}, {14, "Сбросить поиск и фильтры"}});
     }
     void show_library() {
         stop_autoplay();
-        if (!library_scanned) { library.refresh(); library_scanned = true; }
+        if (!ensure_catalogue(114)) return;
         library_rows = library.query(library_filter);
         const auto capacity = library_page_capacity(ScreenWidth(), ScreenHeight());
         const auto pages = std::max<std::size_t>(1, (library_rows.size() + capacity - 1) / capacity);
@@ -733,6 +800,7 @@ private:
         show(Menu::library_years, "Год партии", options);
     }
     void request_file_action(int action) {
+        if (!ensure_catalogue(action)) return;
         const auto* selected = library.find(file);
         if (!selected || selected->source != source_id) throw std::runtime_error("Файл изменён. Сначала открой его заново.");
         persist(); pending_file_action = action; pending_path = file; pending_source = source_id;
@@ -829,9 +897,9 @@ private:
 };
 
 std::unique_ptr<Application> application;
-void confirm_callback(int button) { application->confirm(button); }
-void search_callback(char* text) { application->search(text); }
-void move_callback(char* text) { application->move_to(text); }
+void confirm_callback(int button) { application->confirm(button); application->idle(); }
+void search_callback(char* text) { application->search(text); application->idle(); }
+void move_callback(char* text) { application->move_to(text); application->idle(); }
 void autoplay_callback() { application->autoplay_tick(); }
 void startup_callback() { application->finish_startup(); }
 int handler(int type, int p1, int p2) { return application->event(type, p1, p2); }

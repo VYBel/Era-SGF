@@ -7,10 +7,11 @@ An independent SGF viewer for PocketBook e-readers, starting with **PocketBook E
 
 ## Status
 
-**Version 1.2.0** supports large libraries with incremental indexing, cached search
-and small atomic updates to viewed history. Tested on 117,245 SGFs;
-[benchmarks and migration notes](docs/library-performance.md).
-[Download the compiled application](https://github.com/VYBel/Era-SGF/releases/tag/v1.2.0).
+**Version 1.2.4** opens individual SGFs and resumes the last game without loading
+the full catalogue. Random unviewed games use a compact disk index with bounded
+retries for missing files. Library scanning is explicit; viewed history is preserved.
+Checked with a 117,309-game catalogue; [measurements and limits](docs/library-performance.md).
+[Download the compiled application](https://github.com/VYBel/Era-SGF/releases/tag/v1.2.4).
 The application UI is currently in Russian.
 
 Era-SGF is a native PocketBook application built with the InkView SDK.
@@ -61,7 +62,7 @@ recorded by model, firmware and application version after testing.
 
 ## Installation and builds
 
-Download **Era-SGF-1.2.0-b288.zip** from the [release page](https://github.com/VYBel/Era-SGF/releases/tag/v1.2.0).
+Download **Era-SGF-1.2.4-b288.zip** from the [release page](https://github.com/VYBel/Era-SGF/releases/tag/v1.2.4).
 Extract it into the reader storage root, safely eject USB and launch `era-sgf` from Applications.
 No SDK or compiler is needed to install the release. The optional Linux/POSIX host installer,
 also attached to the release, registers the icon in Games with a configuration backup.

@@ -157,7 +157,7 @@ void ClearTimer(iv_timerproc callback) {
         if (it->second.callback == callback) it = timers.erase(it); else ++it;
     }
 }
-void ForcingSleep() {}
+void ForcingSleep() { std::cout << "SLEEP_REQUEST\n"; }
 void SetAutoKeylock(bool enabled) { auto_keylock = enabled; }
 void SetAutoPowerOff(bool enabled) { auto_poweroff = enabled; }
 int IsTaskActive() { return active; }

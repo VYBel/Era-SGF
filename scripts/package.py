@@ -46,10 +46,19 @@ Installation / Установка:
    If SGF is not visible, use Era-SGF's own Open SGF menu and report the model/firmware.
 
 Library / Библиотека:
-Before upgrading, back up system/config/era-sgf. Version 1.2.0 migrates the catalogue
-with viewed flags; a downgrade to 1.1.1 requires restoring that earlier state too.
-Перед обновлением сохрани system/config/era-sgf. Для отката на 1.1.1 восстанови
-прежнее состояние вместе с приложением: старая версия не читает новый каталог.
+Before upgrading, back up all of system/config/era-sgf. For rollback, restore both
+that backup and the old application: versions before 1.2.2 cannot read pending changes.
+Перед обновлением сохрани всю папку system/config/era-sgf. Для отката восстанови
+прежнюю папку состояния и приложение: версии до 1.2.2 не читают отложенные отметки.
+After upgrading, choose Library → ⋯ → Обновить список партий once to build the random index.
+После обновления один раз выбери «Библиотека партий → ⋯ → Обновить список партий»
+для создания индекса случайного выбора. На большом архиве эта операция может быть долгой.
+Opening a single SGF or resuming a game does not load the full catalogue.
+Random selection uses a compact index; it never automatically scans the SGF folders.
+Missing files are skipped, with at most 32 probes and a 250 ms budget between probes.
+Individual OS reads are not interrupted. If no game is found, refresh the library explicitly.
+Прямое открытие SGF и возврат к последней партии не загружают весь каталог.
+Случайный выбор использует индекс; поиск недоступных файлов ограничен, без фоновых повторов.
 The 20,000-file cap is removed; the library was host-tested with 117,245 SGFs.
 Refresh reuses unchanged records. Use «Перепроверить все файлы» for a forced rescan,
 including edits which preserve file size and timestamps.

@@ -29,12 +29,23 @@ class DeviceAdapter(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def run_ui(self, events, *args, wait_startup=True):
+    def run_ui(self, events, *args, wait_startup=True, wait_catalogue=True):
+        if wait_catalogue:
+            steps = []
+            for event in events.split(';'):
+                steps.append(event)
+                if event.startswith(('tap-text:Библиотека партий',
+                                     'tap-text:Перенести в viewed', 'tap-text:Удалить файл с книги')):
+                    steps.append('wait:1500')
+            events = ';'.join(steps)
         env = dict(os.environ, ERA_SGF_ROOT=str(self.root), ERA_SGF_TEST_EVENTS=('wait:1500;' if wait_startup else '') + events,
                    ERA_SGF_TEST_FRAME=str(self.root / 'frame.pgm'))
         result = subprocess.run([UI, *map(str, args)], env=env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         return result.stdout
+
+    def index_library(self):
+        subprocess.run([INSPECT, '--catalogue', str(self.root)], check=True, capture_output=True)
 
     def test_custom_menu_header_back_close_and_wake(self):
         trace = self.run_ui('menu;tap-text:Настройки;tap-text:Пауза автолистания;'
@@ -155,6 +166,7 @@ class DeviceAdapter(unittest.TestCase):
         first.write_text('(;SZ[9]CA[UTF-8]PB[Go Seigen]PW[Cho Chikun]DT[1969-11-14];B[aa]C[Target game])')
         (self.root / 'sgf/2001').mkdir()
         (self.root / 'sgf/2001/second.sgf').write_text('(;SZ[9]PB[Other]PW[Players]DT[2001-01-01])')
+        self.index_library()
         trace = self.run_ui('menu;tap-text:Библиотека партий;tap-text:Поиск;text:seigen;tap-text:Go Seigen;next;close')
         self.assertIn('Target game', trace)
         trace = self.run_ui('menu;tap-text:Библиотека партий;tap-text:Просмотренные;close')
@@ -201,7 +213,7 @@ class DeviceAdapter(unittest.TestCase):
         trace = self.run_ui('menu;tap-text:Текущая партия;tap-text:Начать автолистание;wait:2000;wait:2000;wait:20000;close', self.record)
         self.assertEqual(self.saved_node(), 2)
         self.assertIn('TIMERS_ACTIVE 0', trace)
-        self.assertEqual(trace.splitlines().count('FRAME'), 7)  # splash, board, two menus, start, two moves
+        self.assertEqual(trace.splitlines().count('FRAME'), 6)  # direct board, two menus, start, two moves
 
     def test_autoplay_stops_on_manual_navigation_menu_hide_background_rotation_and_errors(self):
         self.record.write_text('(;SZ[9];B[aa];W[bb];B[cc];W[dd])')
@@ -217,7 +229,7 @@ class DeviceAdapter(unittest.TestCase):
 
     def test_static_view_has_no_periodic_refresh_or_active_timer(self):
         trace = self.run_ui('previous;wait:60000;previous;wait:60000;close', self.record)
-        self.assertEqual(trace.splitlines().count('FRAME'), 2)  # splash, then one static board
+        self.assertEqual(trace.splitlines().count('FRAME'), 1)  # associated file opens directly
         self.assertIn('TIMERS_ACTIVE 0', trace)
 
     def test_autoplay_disables_system_idle_actions_only_while_running(self):
@@ -328,13 +340,125 @@ class DeviceAdapter(unittest.TestCase):
         self.assertIn('Снимок сохранён', trace)
 
     def test_launch_shows_version_then_dismisses_once_without_idle_timers(self):
-        trace = self.run_ui('wait:1500;wait:60000;close', self.record, wait_startup=False)
+        trace = self.run_ui('wait:1500;wait:60000;close', wait_startup=False)
         self.assertIn('Версия ' + Path('VERSION').read_text().strip(), trace)
         self.assertEqual(trace.splitlines().count('FRAME'), 2)
         self.assertIn('TIMERS_ACTIVE 0', trace)
-        trace = self.run_ui('hide;wait:60000;close', self.record, wait_startup=False)
+        trace = self.run_ui('hide;wait:60000;close', wait_startup=False)
         self.assertEqual(trace.splitlines().count('FRAME'), 1)
         self.assertIn('TIMERS_ACTIVE 0', trace)
+
+    def test_empty_startup_can_exit_without_loading_catalogue(self):
+        trace = self.run_ui('back;wait:60000;close', wait_startup=False)
+        self.assertIn('APP_CLOSED', trace)
+        self.assertNotIn('Ход', trace)
+        self.assertFalse((self.root / 'system/config/era-sgf/last').exists())
+        self.assertIn('TIMERS_ACTIVE 0', trace)
+
+    def test_missing_launch_file_keeps_menu_usable(self):
+        trace = self.run_ui('menu;tap-text:Настройки;close', self.root / 'missing.sgf')
+        self.assertIn('Cannot open', trace)
+        self.assertIn('Настройки', self.last_frame(trace))
+
+    def test_saved_library_is_used_until_explicit_refresh(self):
+        (self.root / 'sgf').mkdir()
+        game = self.root / 'sgf/cached.sgf'
+        game.write_text('(;SZ[19]PB[Cached player])')
+        subprocess.run([INSPECT, '--catalogue', str(self.root)], check=True, capture_output=True)
+        database = self.root / 'system/config/era-sgf/library.db'
+        before = database.read_bytes()
+        # A disconnected/moved archive must not trigger an expensive scan and
+        # silently replace the saved catalogue on first opening the library.
+        game.unlink()
+        trace = self.run_ui('menu;tap-text:Библиотека партий;close')
+        self.assertIn('Cached player', self.last_frame(trace))
+        self.assertEqual(database.read_bytes(), before)
+        trace = self.run_ui('menu;tap-text:Библиотека партий;menu;'
+                            'tap-text:Обновить список партий;close')
+        self.assertNotIn('Cached player', self.last_frame(trace))
+
+    def test_new_files_are_discovered_only_by_explicit_refresh(self):
+        (self.root / 'sgf').mkdir()
+        (self.root / 'sgf/added.sgf').write_text('(;SZ[9]PB[Found explicitly])')
+        trace = self.run_ui('menu;tap-text:Библиотека партий;close')
+        self.assertIn('Найдено: 0 из 0', self.last_frame(trace))
+        trace = self.run_ui('menu;tap-text:Библиотека партий;menu;tap-text:Обновить список партий;close')
+        self.assertIn('Found explicitly', self.last_frame(trace))
+
+    def test_associated_game_is_added_and_viewed_after_restart(self):
+        self.run_ui('next;next;close', self.record)
+        trace = self.run_ui('menu;tap-text:Библиотека партий;tap-text:Просмотренные;close')
+        self.assertIn('Найдено: 1 из 1', self.last_frame(trace))
+
+    def large_saved_catalogue(self, count=3000):
+        state = self.root / 'system/config/era-sgf'
+        state.mkdir(exist_ok=True)
+        snapshot = 'ERA-SGF-LIBRARY\t2\tcomplete\t0123456789abcdef\n'
+        for i in range(count):
+            fields = [(f'sgf/{i}.sgf').encode().hex(), '0123456789abcdef',
+                      '506c61796572', '', '', '', '756e6b6e6f776e', '',
+                      '1' if i == 0 else '0', '1', '10', '1', '1', '0', '0']
+            snapshot += '\t'.join(fields) + '\n'
+        database = state / 'library.db'
+        database.write_text(snapshot)
+        return database
+
+    def test_associated_game_opens_before_reading_large_catalogue_and_stays_idle(self):
+        database = self.large_saved_catalogue()
+        before = database.read_bytes()
+        trace = self.run_ui('policy;wait:60000;policy;close', self.record, wait_startup=False)
+        self.assertIn('Ход 0 / 2', trace)
+        self.assertNotIn('Загрузка каталога', trace)
+        self.assertEqual(trace.splitlines().count('FRAME'), 1)
+        self.assertEqual(trace.count('POWER_POLICY 1 1 TIMERS 0'), 2)
+        self.assertEqual(database.read_bytes(), before)
+        trace = self.run_ui('policy;close')
+        self.assertIn('Ход 0 / 2', trace)
+        self.assertNotIn('Загрузка каталога', trace)
+
+    def test_single_file_open_survives_broken_catalogue_without_replacing_it(self):
+        database = self.large_saved_catalogue()
+        database.write_text('broken catalogue\n')
+        trace = self.run_ui('next;close', self.record, wait_startup=False)
+        self.assertEqual(self.saved_node(), 1)
+        self.assertNotIn('Не удалось загрузить каталог', trace)
+        self.assertEqual(database.read_text(), 'broken catalogue\n')
+
+    def test_keyboard_callback_returns_to_idle_after_redrawing(self):
+        self.navigation_fixture()
+        trace = self.run_ui(self.tap_label('number') + ';text:17;policy;close', self.record)
+        self.assertEqual(self.saved_move(), 17)
+        self.assertIn('POWER_POLICY 1 1 TIMERS 0', trace)
+        before_policy = trace.split('POWER_POLICY ')[0]
+        self.assertGreater(before_policy.rfind('SLEEP_REQUEST'), before_policy.rfind('END_FRAME'))
+
+    def test_cancel_half_loaded_catalogue_keeps_snapshot_and_resume(self):
+        database = self.large_saved_catalogue(20000)
+        before = database.read_bytes()
+        trace = self.run_ui('menu;tap-text:Библиотека партий;wait:1;tap:1214,50;wait:60000;policy;close', self.record, wait_catalogue=False)
+        self.assertIn('Ход 0 / 2', self.last_frame(trace))
+        self.assertIn('POWER_POLICY 1 1 TIMERS 0', trace)
+        self.assertEqual(database.read_bytes(), before)
+        self.assertEqual(self.saved_node(), 0)
+
+    def test_catalogue_loading_resumes_after_sleep_without_losing_viewed_status(self):
+        database = self.large_saved_catalogue(20000)
+        before = database.read_bytes()
+        trace = self.run_ui('menu;tap-text:Библиотека партий;wait:1;hide;wait:60000;show;wait:1500;'
+                            'tap-text:Просмотренные;close', wait_catalogue=False)
+        self.assertIn('Найдено: 1 из 20000', self.last_frame(trace))
+        self.assertEqual(database.read_bytes(), before)
+        self.assertIn('TIMERS_ACTIVE 0', trace)
+
+    def test_damaged_catalogue_does_not_get_replaced_by_the_launch_game(self):
+        database = self.large_saved_catalogue()
+        with database.open('a') as out:
+            out.write('truncated invalid row\n')
+        before = database.read_bytes()
+        trace = self.run_ui('menu;tap-text:Библиотека партий;next;close', self.record)
+        self.assertIn('Не удалось загрузить каталог', trace)
+        self.assertEqual(database.read_bytes(), before)
+        self.assertEqual(self.saved_node(), 1)
 
     def test_all_seven_logo_choices_draw_distinct_marks_and_the_choice_survives_restart(self):
         images = set()
@@ -344,7 +468,7 @@ class DeviceAdapter(unittest.TestCase):
             self.assertIn('TIMERS_ACTIVE 0', trace)
         self.assertEqual(len(images), 7)
         last = (self.root / 'frame.pgm').read_bytes()
-        self.run_ui('close', self.record, wait_startup=False)
+        self.run_ui('close', wait_startup=False)
         self.assertEqual((self.root / 'frame.pgm').read_bytes(), last)
         self.assertIn('logo=7', (self.root / 'system/config/era-sgf/preferences').read_text())
 
@@ -442,8 +566,14 @@ class DeviceAdapter(unittest.TestCase):
         (self.root / 'sgf').mkdir()
         new = self.root / 'sgf/new.sgf'
         new.write_text('(;SZ[19]PB[Random target]PW[Opponent];B[aa])')
+        self.index_library()
         trace = self.run_ui('menu;tap-text:Текущая партия;tap-text:Файл и отметка;tap-text:Отметить просмотренной;menu;tap-text:Случайная новая партия;close', self.record)
         self.assertIn('B: Random target - W: Opponent', trace)
+        self.assertNotIn('Загрузка каталога', trace)
+        self.assertIn('TIMERS_ACTIVE 0', trace)
+        diagnostics = self.root / 'system/config/era-sgf/diagnostics.log'
+        if diagnostics.exists():
+            self.assertNotIn('catalogue ', diagnostics.read_text())
         trace = self.run_ui('menu;tap-text:Библиотека партий;tap-text:Новые;close')
         self.assertIn('Random target', self.last_frame(trace))
         self.assertIn('Найдено: 1 из 2', self.last_frame(trace))
@@ -456,9 +586,25 @@ class DeviceAdapter(unittest.TestCase):
         self.assertEqual(self.saved_node(), 2)
         (self.root / 'sgf').mkdir()
         (self.root / 'sgf/broken.sgf').write_text('(;SZ[19]AB[zz])')
-        trace = self.run_ui('menu;tap-text:Случайная новая партия;close', self.record)
+        trace = self.run_ui('menu;tap-text:Библиотека партий;menu;tap-text:Обновить список партий;'
+                            'tap-text:Случайная новая;close', self.record)
         self.assertIn('не удалось прочитать', trace)
         self.assertNotIn('Все партии уже просмотрены', trace)
+
+    def test_random_stops_when_many_indexed_files_are_missing(self):
+        (self.root / 'sgf').mkdir()
+        for i in range(80):
+            (self.root / f'sgf/missing-{i}.sgf').write_text('(;SZ[9];B[aa])')
+        self.index_library()
+        for path in (self.root / 'sgf').glob('*.sgf'):
+            path.unlink()
+        trace = self.run_ui('next;next;menu;tap-text:Случайная новая партия;wait:60000;close', self.record)
+        self.assertIn('Поиск остановлен', trace)
+        self.assertIn('Обнови список партий', trace)
+        self.assertNotIn('Все партии уже просмотрены', trace)
+        self.assertNotIn('Загрузка каталога', trace)
+        self.assertIn('TIMERS_ACTIVE 0', trace)
+        self.assertEqual(self.saved_node(), 2)
 
     @staticmethod
     def last_frame(trace):
@@ -467,6 +613,7 @@ class DeviceAdapter(unittest.TestCase):
     def test_library_is_fullscreen_with_direct_filters_and_random_ignores_them(self):
         (self.root / 'sgf').mkdir()
         (self.root / 'sgf/new.sgf').write_text('(;SZ[19]PB[Only new]PW[Other]DT[2000];B[aa])')
+        self.index_library()
         trace = self.run_ui('menu;tap-text:Текущая партия;tap-text:Файл и отметка;tap-text:Отметить просмотренной;menu;tap-text:Библиотека партий;tap-text:Просмотренные;'
                             'tap-text:Поиск;text:нет такой партии;tap-text:Случайная новая;close', self.record)
         self.assertIn('B: Only new - W: Other', self.last_frame(trace))
@@ -476,6 +623,7 @@ class DeviceAdapter(unittest.TestCase):
         (self.root / 'sgf').mkdir()
         for i in range(20):
             (self.root / f'sgf/{i:02}.sgf').write_text(f'(;SZ[19]PB[Player {i:02}]PW[Opponent]DT[2000])')
+        self.index_library()
         trace = self.run_ui('menu;tap-text:Библиотека партий;next;tap-text:Год;tap:70,60;hide;show;close')
         frame = self.last_frame(trace)
         self.assertIn('2 / 3', frame)

@@ -41,6 +41,182 @@ struct Fixture {
 };
 }
 int main() {
+    test("random selection uses disk index without loading metadata and skips missing files", [] {
+        Fixture f; Library built(f.root, f.state); built.refresh();
+        Library direct(f.root, f.state, true); std::mt19937 random(7);
+        CHECK(!direct.random_unviewed(random).empty());
+        CHECK(direct.records().empty()); CHECK(!direct.ready());
+        ::unlink((f.root + "/sgf/1969/first.sgf").c_str());
+        for (int i = 0; i < 20; ++i) CHECK(direct.random_unviewed(random) == "sgf/2001/second.sgf");
+        direct.track("sgf/2001/second.sgf", read_file(f.root + "/sgf/2001/second.sgf"));
+        direct.set_viewed("sgf/2001/second.sgf", true);
+        CHECK(direct.random_unviewed(random).empty());
+        f.write("Books/new.sgf", "(;SZ[9]PB[New])");
+        direct.track("Books/new.sgf", read_file(f.root + "/Books/new.sgf"));
+        CHECK(direct.random_unviewed(random) == "Books/new.sgf");
+        Library restarted(f.root, f.state, true);
+        CHECK(restarted.random_unviewed(random) == "Books/new.sgf");
+    });
+    test("random index overlays journal moves deletes and pending replacements", [] {
+        Fixture f; Library built(f.root, f.state); built.refresh();
+        const auto first = std::string("sgf/1969/first.sgf"), second = std::string("sgf/2001/second.sgf");
+        built.set_viewed(first, true);
+        Library direct(f.root, f.state, true); std::mt19937 random(17);
+        direct.track(first, read_file(f.root + '/' + first));
+        CHECK(direct.random_game(random).path == second);
+        built.move_to_viewed(second);
+        CHECK(direct.random_game(random).unviewed == 0);
+        direct.set_viewed(first, false);
+        CHECK(direct.random_game(random).path == first);
+        // Full loading merges explicit marks, then deletion must win over the cache.
+        Library merged(f.root, f.state); merged.erase(first);
+        auto selection = direct.random_game(random);
+        CHECK(selection.path.empty()); CHECK(selection.total == 1); CHECK(selection.unviewed == 0);
+        const auto moved = merged.records().front().path;
+        f.write(moved, "(;SZ[9]PB[Replacement])");
+        direct.track(moved, read_file(f.root + '/' + moved));
+        CHECK(direct.random_game(random).path == moved);
+        direct.set_viewed(moved, true);
+        CHECK(direct.random_game(random).unviewed == 0);
+    });
+    test("random cache rejects corruption and stale generations and refresh repairs it", [] {
+        Fixture f; Library built(f.root, f.state); built.refresh();
+        const auto cache = read_file(f.state + "/library.random");
+        Library direct(f.root, f.state, true); std::mt19937 random(3);
+        ::unlink((f.state + "/library.random").c_str());
+        throws([&] { direct.random_game(random); });
+        built.refresh(); CHECK(!direct.random_game(random).path.empty());
+        auto broken = cache; broken[70] ^= 1;
+        write_file_atomic(f.state + "/library.random", broken);
+        throws([&] { direct.random_game(random); });
+        built.refresh(); CHECK(!direct.random_game(random).path.empty());
+        broken = cache; broken[8] ^= 1;
+        write_file_atomic(f.state + "/library.random", broken);
+        throws([&] { direct.random_game(random); });
+        built.refresh(); built.set_viewed("sgf/1969/first.sgf", true);
+        built.set_viewed("sgf/2001/second.sgf", true);
+        built.rebuild_random_index(); // A cache made after journal replay remains idempotent.
+        CHECK(direct.random_game(random).unviewed == 0);
+        built.set_viewed("sgf/2001/second.sgf", false);
+        CHECK(direct.random_game(random).path == "sgf/2001/second.sgf");
+    });
+    test("random search has a finite probe budget without losing catalogue entries", [] {
+        Fixture f;
+        for (int i = 0; i < 80; ++i) f.write("sgf/removed-" + std::to_string(i) + ".sgf", "(;SZ[9];B[aa])");
+        Library built(f.root, f.state); built.refresh();
+        for (const auto& record : built.records()) CHECK(::unlink((f.root + '/' + record.path).c_str()) == 0);
+        const auto snapshot = read_file(f.state + "/library.db"), cache = read_file(f.state + "/library.random");
+        Library direct(f.root, f.state, true); std::mt19937 random(5);
+        for (int i = 0; i < 3; ++i) {
+            const auto result = direct.random_game(random);
+            CHECK(result.path.empty()); CHECK(result.search_limited);
+            CHECK(result.attempts > 0 && result.attempts <= 32);
+            CHECK(result.total == 82); CHECK(result.unviewed == 82);
+        }
+        CHECK(read_file(f.state + "/library.db") == snapshot);
+        CHECK(read_file(f.state + "/library.random") == cache);
+        CHECK(direct.records().empty()); CHECK(!direct.ready());
+    });
+    test("small missing library exhausts candidates without declaring all viewed", [] {
+        Fixture f; Library built(f.root, f.state); built.refresh();
+        for (const auto& record : built.records()) CHECK(::unlink((f.root + '/' + record.path).c_str()) == 0);
+        Library direct(f.root, f.state, true); std::mt19937 random(9);
+        const auto result = direct.random_game(random);
+        CHECK(result.path.empty()); CHECK(!result.search_limited);
+        CHECK(result.attempts == 2); CHECK(result.unviewed == 2);
+    });
+    test("direct registration preserves the snapshot and merges new games and viewed state", [] {
+        Fixture f; Library original(f.root, f.state); original.refresh();
+        original.set_viewed("sgf/1969/first.sgf", true);
+        const auto snapshot = read_file(f.state + "/library.db");
+        const auto changes = read_file(f.state + "/library.changes");
+        f.write("Books/new.sgf", "(;SZ[9]PB[Direct open];B[aa])");
+        {
+            Library direct(f.root, f.state, true);
+            direct.track("sgf/1969/first.sgf", read_file(f.root + "/sgf/1969/first.sgf"));
+            direct.track("Books/new.sgf", read_file(f.root + "/Books/new.sgf"));
+            direct.set_viewed("Books/new.sgf", true);
+            CHECK(direct.records().empty());
+            CHECK(read_file(f.state + "/library.db") == snapshot);
+            CHECK(read_file(f.state + "/library.changes") == changes);
+        }
+        Library reopened(f.root, f.state);
+        CHECK(reopened.records().size() == 3);
+        CHECK(reopened.find("sgf/1969/first.sgf")->viewed);
+        CHECK(reopened.find("Books/new.sgf")->viewed);
+        CHECK(reopened.find("Books/new.sgf")->black == "Direct open");
+        CHECK(read_file(f.state + "/library.db") == snapshot);
+        Library direct(f.root, f.state, true);
+        direct.track("sgf/1969/first.sgf", read_file(f.root + "/sgf/1969/first.sgf"));
+        direct.set_viewed("sgf/1969/first.sgf", false);
+        Library unmarked(f.root, f.state);
+        CHECK(!unmarked.find("sgf/1969/first.sgf")->viewed);
+        CHECK(unmarked.find("Books/new.sgf")->viewed);
+    });
+    test("stepped catalogue loading yields and preserves viewed journal on completion", [] {
+        Fixture f;
+        { Library original(f.root, f.state); original.refresh(); original.set_viewed("sgf/1969/first.sgf", true); }
+        const auto before = read_file(f.state + "/library.db");
+        {
+            Library cancelled(f.root, f.state, true);
+            CHECK(cancelled.records().empty());
+            CHECK(!cancelled.load_step(1));
+            CHECK(cancelled.records().size() == 1);
+        }
+        CHECK(read_file(f.state + "/library.db") == before);
+        Library resumed(f.root, f.state, true);
+        unsigned steps = 0;
+        while (!resumed.load_step(1)) { CHECK(++steps < 10); }
+        CHECK(steps >= 2); CHECK(resumed.loaded()); CHECK(resumed.load_percent() == 100);
+        CHECK(resumed.records().size() == 2);
+        CHECK(resumed.find("sgf/1969/first.sgf")->viewed);
+        CHECK(read_file(f.state + "/library.db") == before);
+    });
+    test("deferred registration preserves a pending mark across reopen but resets it for replaced content", [] {
+        Fixture f; const auto path = "sgf/1969/first.sgf";
+        { Library direct(f.root, f.state, true); direct.track(path, read_file(f.root + '/' + path)); direct.set_viewed(path, true); }
+        { Library direct(f.root, f.state, true); direct.track(path, read_file(f.root + '/' + path)); CHECK(direct.pending_viewed(path) == 1); }
+        f.write(path, "(;SZ[9]PB[Replaced];B[dd])");
+        { Library direct(f.root, f.state, true); direct.track(path, read_file(f.root + '/' + path)); CHECK(direct.pending_viewed(path) == -1); }
+        Library reopened(f.root, f.state);
+        CHECK(reopened.records().size() == 1); CHECK(!reopened.find(path)->viewed);
+        CHECK(reopened.find(path)->black == "Replaced");
+    });
+    test("pending replay after catalogue commit is idempotent and newer marks survive", [] {
+        Fixture f; Library initial(f.root, f.state); initial.refresh();
+        const std::string path = "sgf/1969/first.sgf";
+        Library direct(f.root, f.state, true); direct.track(path, read_file(f.root + '/' + path)); direct.set_viewed(path, true);
+        const auto pending = f.state + "/library.pending/" + fingerprint(path) + ".record";
+        const auto saved = read_file(pending);
+        { Library merged(f.root, f.state); CHECK(merged.find(path)->viewed); }
+        // Simulate a crash after catalogue commit but before queue removal.
+        write_file_atomic(pending, saved);
+        { Library replayed(f.root, f.state); CHECK(replayed.find(path)->viewed); replayed.set_viewed(path, false); }
+        Library reopened(f.root, f.state); CHECK(!reopened.find(path)->viewed);
+        CHECK(::access(pending.c_str(), F_OK) != 0);
+    });
+    test("damaged pending entries retain the full snapshot and the recovery data", [] {
+        Fixture f; Library initial(f.root, f.state); initial.refresh();
+        const auto snapshot = read_file(f.state + "/library.db");
+        const std::string path = "sgf/1969/first.sgf";
+        { Library direct(f.root, f.state, true); direct.track(path, read_file(f.root + '/' + path)); }
+        const auto pending = f.state + "/library.pending/" + fingerprint(path) + ".record";
+        auto data = read_file(pending); data.back() = 'x'; write_file_atomic(pending, data);
+        Library reopened(f.root, f.state);
+        CHECK(!reopened.ready()); CHECK(!reopened.load_error().empty());
+        CHECK(read_file(f.state + "/library.db") == snapshot);
+        CHECK(read_file(pending) == data);
+    });
+    test("interrupted pending temporary files cannot block or override committed records", [] {
+        Fixture f; Library initial(f.root, f.state); initial.refresh();
+        const std::string path = "sgf/1969/first.sgf";
+        { Library direct(f.root, f.state, true); direct.track(path, read_file(f.root + '/' + path)); direct.set_viewed(path, true); }
+        const auto temporary = f.state + "/library.pending/" + fingerprint(path) + ".record.era-sgf-Ab123Z";
+        write_file_atomic(temporary, "unfinished write");
+        Library reopened(f.root, f.state);
+        CHECK(reopened.ready()); CHECK(reopened.find(path)->viewed);
+        CHECK(read_file(temporary) == "unfinished write");
+    });
     test("random selection excludes viewed and invalid records and preserves status", [] {
         Fixture f; Library library(f.root, f.state); library.refresh();
         std::mt19937 random(1234);
